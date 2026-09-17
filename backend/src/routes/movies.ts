@@ -113,6 +113,7 @@ moviesRouter.get('/search/global', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const page = Math.max(1, Number(req.query.page) || 1);
+    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 24));
 
     if (!q) {
       const sourcesTotal = listVodSources().length;
@@ -129,12 +130,13 @@ moviesRouter.get('/search/global', async (req, res) => {
     }
 
     const [vodResult, archiveResult] = await Promise.all([
-      searchAllVodMovies(q, page),
-      searchByKeyword(q, page, 8).catch(() => null),
+      searchAllVodMovies(q, page, 6, rows),
+      searchByKeyword(q, page, Math.min(rows, 8)).catch(() => null),
     ]);
 
     let items: MovieListItem[] = [...vodResult.items];
     let hasMore = vodResult.hasMore;
+    let total = vodResult.total;
 
     if (archiveResult && archiveResult.items.length > 0) {
       const archiveItems = archiveResult.items.map((item) => ({
@@ -146,18 +148,23 @@ moviesRouter.get('/search/global', async (req, res) => {
         if (!!a.thumbnail !== !!b.thumbnail) return a.thumbnail ? -1 : 1;
         return a.title.localeCompare(b.title, 'zh-CN');
       });
+      total += archiveResult.total;
       if (page * archiveResult.rows < archiveResult.total) {
         hasMore = true;
       }
+    }
+
+    if (items.length > rows) {
+      items = items.slice(0, rows);
     }
 
     const sourcesHit = vodResult.sourcesHit + (archiveResult?.items.length ? 1 : 0);
 
     res.json({
       items,
-      total: items.length,
+      total,
       page,
-      rows: vodResult.rows,
+      rows,
       sourcesHit,
       sourcesTotal: vodResult.sourcesTotal + 1,
       hasMore,

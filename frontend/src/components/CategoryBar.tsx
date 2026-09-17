@@ -50,6 +50,7 @@ export default function CategoryBar({ source }: Props) {
 
   function navigateWithType(typeId: number) {
     const next = new URLSearchParams(location.search);
+    next.delete('page');
     if (typeId) next.set('type', String(typeId));
     else next.delete('type');
     const qs = next.toString();

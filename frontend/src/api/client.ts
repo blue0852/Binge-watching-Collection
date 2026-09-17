@@ -53,10 +53,12 @@ export function fetchMovies(
 export function searchMoviesGlobal(
   q: string,
   page = 1,
+  rows = 24,
 ): Promise<GlobalSearchResult> {
   const params = new URLSearchParams({
     q,
     page: String(page),
+    rows: String(rows),
   });
   return request<GlobalSearchResult>(
     `${API_BASE}/movies/search/global?${params}`,

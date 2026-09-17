@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "聚合 Internet Archive 公有领域影视资源的合法播放站",
+  "main": "desktop/main.mjs",
   "workspaces": [
     "backend",
     "frontend"
@@ -10,9 +11,58 @@
   "scripts": {
     "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "build": "npm run build -w backend && npm run build -w frontend",
-    "start": "npm run start -w backend"
+    "start": "npm run start -w backend",
+    "prepare:pack": "node scripts/prepare-pack.mjs",
+    "pack:win": "npm run build && npm run prepare:pack && electron-builder --win",
+    "pack:dir": "npm run build && npm run prepare:pack && electron-builder --win dir"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^9.1.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.publicdomain.cinema",
+    "productName": "Public Domain Cinema",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "pack/app",
+        "to": "app",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-setup.exe"
+    }
   }
 }

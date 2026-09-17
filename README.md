@@ -28,15 +28,38 @@ npm run dev
 | 服务 | 地址 |
 |------|------|
 | 前端（开发） | http://localhost:5173 |
-| 后端 API | http://localhost:3001/api |
+| 后端 API | http://localhost:3002/api |
 
 生产环境：
 
 ```bash
 npm run build
 npm start
-# 访问 http://localhost:3001
+# 访问 http://localhost:3002
 ```
+
+## 打包为 Windows exe
+
+使用 Electron 将前后端与 `config.json` 打成桌面应用（内置本地服务，无需单独安装 Node.js）：
+
+```bash
+npm install
+# 国内网络建议先设置镜像（PowerShell）：
+# $env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+# $env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm run pack:win
+```
+
+产物在 `release/` 目录：
+
+| 文件 | 说明 |
+|------|------|
+| `Public Domain Cinema-1.0.0-portable.exe` | 绿色便携版，双击即用 |
+| `Public Domain Cinema-1.0.0-setup.exe` | 安装版 |
+
+仅生成未压缩目录（调试打包用）：`npm run pack:dir`
+
+打包前会自动执行 `npm run build` 与 `prepare:pack`（复制构建产物并在 `pack/app` 安装后端运行时依赖）。首次打包会下载 Electron，体积约 150MB+，属正常现象。
 
 ## 项目结构
 

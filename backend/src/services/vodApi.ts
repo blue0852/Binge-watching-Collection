@@ -351,6 +351,7 @@ export async function searchAllVodMovies(
   keyword: string,
   page = 1,
   rowsPerSite = GLOBAL_SEARCH_ROWS_PER_SITE,
+  maxReturn = 24,
 ): Promise<GlobalSearchResult> {
   const safe = keyword.trim();
   const sources = listVodSources();
@@ -369,6 +370,7 @@ export async function searchAllVodMovies(
   const items: MovieListItem[] = [];
   let sourcesHit = 0;
   let hasMore = false;
+  let totalSum = 0;
 
   for (let i = 0; i < sources.length; i += GLOBAL_SEARCH_BATCH) {
     const batch = sources.slice(i, i + GLOBAL_SEARCH_BATCH);
@@ -379,6 +381,7 @@ export async function searchAllVodMovies(
     for (const result of settled) {
       if (result.status !== 'fulfilled') continue;
       const { items: batchItems, total } = result.value;
+      totalSum += total;
       if (batchItems.length === 0) continue;
       sourcesHit++;
       items.push(...batchItems);
@@ -388,14 +391,17 @@ export async function searchAllVodMovies(
     }
   }
 
+  const sorted = sortSearchItems(items);
+  const capped = sorted.slice(0, maxReturn);
+
   return {
-    items: sortSearchItems(items),
-    total: items.length,
+    items: capped,
+    total: Math.max(totalSum, capped.length),
     page,
-    rows: rowsPerSite,
+    rows: maxReturn,
     sourcesHit,
     sourcesTotal: sources.length,
-    hasMore,
+    hasMore: hasMore || sorted.length > maxReturn,
   };
 }
 

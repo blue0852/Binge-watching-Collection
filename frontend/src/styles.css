@@ -403,6 +403,120 @@ img {
   color: var(--text-dim);
 }
 
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 28px 16px;
+}
+.page-btn {
+  padding: 8px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+}
+.page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.page-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.page-num {
+  min-width: 36px;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+}
+.page-num.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.page-ellipsis {
+  color: var(--text-dim);
+  padding: 0 4px;
+}
+.page-summary {
+  color: var(--text-dim);
+  font-size: 13px;
+  width: 100%;
+  text-align: center;
+  margin-top: 4px;
+}
+.player-episode-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 16px;
+  padding: 12px 16px;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+}
+.btn-episode-nav {
+  min-width: 88px;
+  font-weight: 600;
+}
+.btn-episode-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.player-episode-nav .now-playing-ep {
+  flex: 1;
+  text-align: center;
+  min-width: 120px;
+  font-size: 14px;
+  color: var(--text);
+}
+.player-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin-top: 12px;
+  padding: 0 16px 4px;
+}
+.continuous-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.continuous-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+.now-playing-ep {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.player-lines {
+  margin-top: 12px;
+}
+.player-sources .pagination {
+  padding: 16px 0 0;
+}
+.player-sources .page-summary {
+  display: none;
+}
+
 .load-more {
   text-align: center;
   padding: 32px;

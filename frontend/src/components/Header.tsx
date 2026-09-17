@@ -48,6 +48,7 @@ export default function Header() {
   ): string {
     const params = new URLSearchParams();
     if (nextSource) params.set('source', nextSource);
+    params.delete('page');
     if (nextQ) {
       params.set('q', nextQ);
       params.set('scope', scope);
@@ -60,6 +61,17 @@ export default function Header() {
     return qs ? `/?${qs}` : '/';
   }
 
+  function exitSearch() {
+    navigate(buildUrl('', source, true));
+  }
+
+  function onSearchInputChange(value: string) {
+    setQ(value);
+    if (!value.trim() && new URLSearchParams(location.search).get('q')) {
+      exitSearch();
+    }
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = q.trim();
@@ -67,7 +79,7 @@ export default function Header() {
       navigate(buildUrl(trimmed, source, false, searchScope));
       return;
     }
-    navigate(buildUrl('', source));
+    exitSearch();
   }
 
   function onScopeChange(next: SearchScope) {
@@ -83,6 +95,7 @@ export default function Header() {
     const currentQ = params.get('q')?.trim();
     if (currentQ) {
       params.set('source', next);
+      params.delete('page');
       navigate(`/?${params.toString()}`);
       return;
     }
@@ -126,7 +139,7 @@ export default function Header() {
               className="search-input"
               placeholder="搜索电影 / 关键词…"
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => onSearchInputChange(e.target.value)}
               aria-label="搜索影视"
             />
             <button type="submit" className="search-btn">

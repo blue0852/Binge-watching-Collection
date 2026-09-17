@@ -3,21 +3,13 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import VideoPlayer from '../components/VideoPlayer.js';
 import { fetchMovieDetail } from '../api/client.js';
 import { proxyImageUrl } from '../utils/imageUrl.js';
+import { buildListUrl } from '../utils/listUrl.js';
 import type { MovieDetail } from '../types.js';
-
-function buildBackUrl(source: string, type: string): string {
-  const params = new URLSearchParams();
-  if (source) params.set('source', source);
-  if (type) params.set('type', type);
-  const qs = params.toString();
-  return qs ? `/?${qs}` : '/';
-}
 
 export default function MovieDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
-  const source = searchParams.get('source') || '';
-  const type = searchParams.get('type') || '';
+  const backUrl = buildListUrl(searchParams);
   const [movie, setMovie] = useState<MovieDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,8 +50,8 @@ export default function MovieDetailPage() {
       <div className="error-box">
         加载失败：{error}
         <div>
-          <Link to={buildBackUrl(source, type)} className="btn">
-            返回首页
+          <Link to={backUrl} className="btn">
+            返回列表
           </Link>
         </div>
       </div>
@@ -67,8 +59,6 @@ export default function MovieDetailPage() {
   }
 
   if (!movie) return null;
-
-  const backUrl = buildBackUrl(source, type);
 
   return (
     <div className="detail">

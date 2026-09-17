@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import MovieCard from '../components/MovieCard.js';
 import CategoryBar from '../components/CategoryBar.js';
+import Pagination from '../components/Pagination.js';
 import {
   fetchMovies,
   searchMovies,
@@ -15,24 +16,34 @@ const PAGE_SIZE = 24;
 
 export default function Home() {
   const location = useLocation();
+  const navigate = useNavigate();
   const searchParams = new URLSearchParams(location.search);
   const query = searchParams.get('q') || '';
   const source = searchParams.get('source') || 'dyttzy';
   const typeId = Number(searchParams.get('type')) || 0;
   const searchScope = searchParams.get('scope') === 'site' ? 'site' : 'global';
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
   const isGlobalSearch = Boolean(query) && searchScope === 'global';
   const isSiteSearch = Boolean(query) && searchScope === 'site';
 
   const [items, setItems] = useState<MovieListItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
   const [sourceName, setSourceName] = useState('');
   const [categoryName, setCategoryName] = useState('');
   const [sourcesHit, setSourcesHit] = useState(0);
   const [sourcesTotal, setSourcesTotal] = useState(0);
+
+  function goToPage(nextPage: number) {
+    const params = new URLSearchParams(location.search);
+    if (nextPage <= 1) params.delete('page');
+    else params.set('page', String(nextPage));
+    const qs = params.toString();
+    navigate(qs ? `/?${qs}` : '/');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   useEffect(() => {
     fetchSources().then((res) => {
@@ -53,12 +64,6 @@ export default function Home() {
   }, [source, typeId]);
 
   useEffect(() => {
-    setItems([]);
-    setPage(1);
-    setHasMore(true);
-  }, [query, source, typeId, searchScope]);
-
-  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -68,10 +73,10 @@ export default function Home() {
     };
 
     if (isGlobalSearch) {
-      searchMoviesGlobal(query, page)
+      searchMoviesGlobal(query, page, PAGE_SIZE)
         .then((res) => {
           if (cancelled) return;
-          setItems((prev) => (page === 1 ? res.items : [...prev, ...res.items]));
+          setItems(res.items);
           setTotal(res.total);
           setSourcesHit(res.sourcesHit);
           setSourcesTotal(res.sourcesTotal);
@@ -85,7 +90,7 @@ export default function Home() {
       searchMovies(query, page, PAGE_SIZE, source)
         .then((res) => {
           if (cancelled) return;
-          setItems((prev) => (page === 1 ? res.items : [...prev, ...res.items]));
+          setItems(res.items);
           setTotal(res.total);
           setSourcesHit(0);
           setSourcesTotal(0);
@@ -99,7 +104,7 @@ export default function Home() {
       fetchMovies(page, PAGE_SIZE, source, typeId || undefined)
         .then((res) => {
           if (cancelled) return;
-          setItems((prev) => (page === 1 ? res.items : [...prev, ...res.items]));
+          setItems(res.items);
           setTotal(res.total);
           setHasMore(page * PAGE_SIZE < res.total);
         })
@@ -115,6 +120,14 @@ export default function Home() {
   }, [query, page, source, typeId, isGlobalSearch, isSiteSearch]);
 
   const isArchive = source === 'archive';
+
+  const totalPages = useMemo(() => {
+    const fromTotal = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (isGlobalSearch && hasMore) {
+      return Math.max(fromTotal, page + 1);
+    }
+    return fromTotal;
+  }, [isGlobalSearch, hasMore, page, total]);
 
   const heading = useMemo(() => {
     if (isGlobalSearch) {
@@ -145,8 +158,9 @@ export default function Home() {
     const p = new URLSearchParams();
     if (source) p.set('source', source);
     if (typeId) p.set('type', String(typeId));
+    if (page > 1) p.set('page', String(page));
     return p.toString();
-  }, [source, typeId]);
+  }, [source, typeId, page]);
 
   return (
     <div className="home">
@@ -158,8 +172,8 @@ export default function Home() {
             : isSiteSearch
               ? `仅在「${sourceName}」内搜索「${query}」`
               : isArchive
-              ? `聚合 Internet Archive 上 ${total.toLocaleString()} 部可合法免费观看的影视作品`
-              : `当前资源站：${sourceName} · 共 ${total.toLocaleString()} 条结果`}
+                ? `聚合 Internet Archive 上 ${total.toLocaleString()} 部可合法免费观看的影视作品`
+                : `当前资源站：${sourceName} · 共 ${total.toLocaleString()} 条结果`}
         </p>
       </section>
 
@@ -188,6 +202,7 @@ export default function Home() {
             ? new URLSearchParams({
                 q: query,
                 scope: searchScope,
+                ...(page > 1 ? { page: String(page) } : {}),
                 ...(isGlobalSearch && m.source
                   ? { source: m.source }
                   : { source }),
@@ -204,15 +219,16 @@ export default function Home() {
         </div>
       )}
 
-      {hasMore && !loading && items.length > 0 && (
-        <div className="load-more">
-          <button className="btn btn-primary" onClick={() => setPage((p) => p + 1)}>
-            加载更多
-          </button>
-        </div>
+      {!loading && items.length > 0 && (
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={goToPage}
+          disabled={loading}
+        />
       )}
 
-      {!hasMore && items.length > 0 && (
+      {!loading && items.length > 0 && page >= totalPages && !hasMore && (
         <p className="end-text">— 已展示全部结果 —</p>
       )}
     </div>

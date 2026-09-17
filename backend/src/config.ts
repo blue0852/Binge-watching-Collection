@@ -1,10 +1,7 @@
 // 加载项目根目录 config.json
 
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { getConfigPath } from './paths.js';
 
 export interface VodSiteConfig {
   api: string;
@@ -21,7 +18,7 @@ let cached: AppConfig | null = null;
 
 export function loadConfig(): AppConfig {
   if (cached) return cached;
-  const configPath = path.resolve(__dirname, '../../config.json');
+  const configPath = getConfigPath();
   cached = JSON.parse(readFileSync(configPath, 'utf-8')) as AppConfig;
   return cached;
 }
