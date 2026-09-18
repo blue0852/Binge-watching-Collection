@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import MovieCard from '../components/MovieCard.js';
 import CategoryBar from '../components/CategoryBar.js';
 import Pagination from '../components/Pagination.js';
@@ -11,8 +11,18 @@ import {
   fetchCategories,
 } from '../api/client.js';
 import type { MovieListItem } from '../types.js';
+import {
+  formatHistoryTime,
+  getPlayHistory,
+  historyDetailPath,
+  historyProgressPercent,
+  HISTORY_CHANGED,
+  type PlayHistoryEntry,
+} from '../utils/playHistory.js';
+import { proxyImageUrl } from '../utils/imageUrl.js';
 
 const PAGE_SIZE = 20;
+const CONTINUE_MAX = 5;
 
 export default function Home() {
   const location = useLocation();
@@ -35,6 +45,17 @@ export default function Home() {
   const [categoryName, setCategoryName] = useState('');
   const [sourcesHit, setSourcesHit] = useState(0);
   const [sourcesTotal, setSourcesTotal] = useState(0);
+  const [continueItems, setContinueItems] = useState<PlayHistoryEntry[]>([]);
+
+  function refreshContinue() {
+    setContinueItems(getPlayHistory().slice(0, CONTINUE_MAX));
+  }
+
+  useEffect(() => {
+    refreshContinue();
+    window.addEventListener(HISTORY_CHANGED, refreshContinue);
+    return () => window.removeEventListener(HISTORY_CHANGED, refreshContinue);
+  }, []);
 
   function goToPage(nextPage: number) {
     const params = new URLSearchParams(location.search);
@@ -176,6 +197,44 @@ export default function Home() {
                 : `当前资源站：${sourceName} · 共 ${total.toLocaleString()} 条结果`}
         </p>
       </section>
+
+      {!query && continueItems.length > 0 && (
+        <section className="continue-section">
+          <div className="continue-head">
+            <h2>继续观看</h2>
+            <Link to="/history">全部历史</Link>
+          </div>
+          <div className="continue-grid">
+            {continueItems.map((entry) => {
+              const pct = historyProgressPercent(entry);
+              const thumb = proxyImageUrl(entry.thumbnail) || entry.thumbnail;
+              return (
+                <Link key={entry.id} to={historyDetailPath(entry)} className="continue-card">
+                  <div className="continue-poster">
+                    {thumb ? (
+                      <img src={thumb} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="poster-placeholder">{entry.title.slice(0, 1)}</div>
+                    )}
+                    {pct != null && pct > 0 && pct < 98 && (
+                      <div className="history-progress-bar">
+                        <span style={{ width: `${pct}%` }} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="continue-body">
+                    <h3 title={entry.title}>{entry.title}</h3>
+                    <p>
+                      {entry.episodeLabel ? `${entry.episodeLabel} · ` : ''}
+                      {formatHistoryTime(entry.updatedAt)}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {!query && <CategoryBar source={source} />}
 
