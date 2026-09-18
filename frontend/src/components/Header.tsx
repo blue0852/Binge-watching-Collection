@@ -1,6 +1,7 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, type FormEvent } from 'react';
 import { fetchSources } from '../api/client.js';
+import HistoryPopover from './HistoryPopover.js';
 import type { SourceInfo } from '../types.js';
 
 export type SearchScope = 'global' | 'site';
@@ -110,9 +111,7 @@ export default function Header() {
           <span className="logo-text">Public Domain Cinema</span>
         </Link>
         <div className="header-controls">
-          <Link to="/history" className="header-nav-link">
-            播放历史
-          </Link>
+          <HistoryPopover />
           <Link to="/sites" className="header-nav-link">
             站点管理
           </Link>
