@@ -61,6 +61,8 @@ npm run pack:win
 
 打包前会自动执行 `npm run build` 与 `prepare:pack`（复制构建产物并在 `pack/app` 安装后端运行时依赖）。首次打包会下载 Electron，体积约 150MB+，属正常现象。
 
+**发布说明**：`release/` 已在 `.gitignore` 中，**不要将 exe 提交到 Git 仓库**（避免仓库体积膨胀）。打包完成后，在 GitHub **Releases** 页创建新版本，将 `release/` 下的 portable / setup 安装包作为**附件**上传即可。
+
 ## 项目结构
 
 ```
