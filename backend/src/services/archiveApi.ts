@@ -100,7 +100,7 @@ function toListItem(doc: ArchiveSearchDoc): MovieListItem {
 export async function searchMovies(
   query: string,
   page = 1,
-  rows = 24,
+  rows = 20,
 ): Promise<PaginatedResult<MovieListItem>> {
   const start = (page - 1) * rows;
   // 限定在 movies 集合、影视类型，且排除一些非视频子集合
@@ -140,7 +140,7 @@ export async function searchMovies(
 export async function searchByKeyword(
   keyword: string,
   page = 1,
-  rows = 24,
+  rows = 20,
 ): Promise<PaginatedResult<MovieListItem>> {
   // 转义用户输入，构造为 title:"xxx" OR description:"xxx" OR subject:"xxx"
   const safe = keyword.replace(/["\\]/g, '').trim();

@@ -12,7 +12,7 @@ import {
 } from '../api/client.js';
 import type { MovieListItem } from '../types.js';
 
-const PAGE_SIZE = 24;
+const PAGE_SIZE = 20;
 
 export default function Home() {
   const location = useLocation();

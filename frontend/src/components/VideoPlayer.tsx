@@ -3,7 +3,8 @@ import Hls from 'hls.js';
 import Pagination from './Pagination.js';
 import type { PlayableFile } from '../types.js';
 
-const EPISODES_PER_PAGE = 24;
+const EPISODES_PER_PAGE = 20;
+const SEEK_STEP_SECONDS = 10;
 
 interface Props {
   files: PlayableFile[];
@@ -104,6 +105,35 @@ export default function VideoPlayer({ files, poster, title, sourceLabel }: Props
       }
     };
   }, [current]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const target = e.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+      const video = videoRef.current;
+      if (!video || error) return;
+
+      e.preventDefault();
+      const delta = e.key === 'ArrowLeft' ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS;
+      let next = video.currentTime + delta;
+      if (Number.isFinite(video.duration)) {
+        next = Math.max(0, Math.min(video.duration, next));
+      } else {
+        next = Math.max(0, next);
+      }
+      video.currentTime = next;
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [error]);
 
   const currentIndex = useMemo(() => {
     if (!current) return -1;

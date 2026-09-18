@@ -7,12 +7,14 @@ import type {
   MovieListItem,
   PaginatedResult,
   SourcesResponse,
+  VodSiteEntry,
+  VodSitesResponse,
 } from '../types.js';
 
 const API_BASE = '/api';
 
-async function request<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as {
       error?: string;
@@ -29,6 +31,28 @@ export function fetchSources(): Promise<SourcesResponse> {
   return request<SourcesResponse>(`${API_BASE}/movies/sources`);
 }
 
+/** VOD 站点列表（含 api 地址，用于管理页） */
+export function fetchVodSites(): Promise<VodSitesResponse> {
+  return request<VodSitesResponse>(`${API_BASE}/movies/sites`);
+}
+
+/** 新增 VOD 站点 */
+export function addVodSite(site: VodSiteEntry): Promise<VodSitesResponse> {
+  return request<VodSitesResponse>(`${API_BASE}/movies/sites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(site),
+  });
+}
+
+/** 删除 VOD 站点 */
+export function deleteVodSite(key: string): Promise<VodSitesResponse> {
+  return request<VodSitesResponse>(
+    `${API_BASE}/movies/sites/${encodeURIComponent(key)}`,
+    { method: 'DELETE' },
+  );
+}
+
 /** 获取 VOD 分类标签 */
 export function fetchCategories(source: string): Promise<CategoriesResponse> {
   return request<CategoriesResponse>(
@@ -39,7 +63,7 @@ export function fetchCategories(source: string): Promise<CategoriesResponse> {
 /** 获取热门列表 */
 export function fetchMovies(
   page = 1,
-  rows = 24,
+  rows = 20,
   source?: string,
   typeId?: number,
 ): Promise<PaginatedResult<MovieListItem>> {
@@ -53,7 +77,7 @@ export function fetchMovies(
 export function searchMoviesGlobal(
   q: string,
   page = 1,
-  rows = 24,
+  rows = 20,
 ): Promise<GlobalSearchResult> {
   const params = new URLSearchParams({
     q,
@@ -69,7 +93,7 @@ export function searchMoviesGlobal(
 export function searchMovies(
   q: string,
   page = 1,
-  rows = 24,
+  rows = 20,
   source?: string,
 ): Promise<PaginatedResult<MovieListItem>> {
   const params = new URLSearchParams({

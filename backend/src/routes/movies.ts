@@ -1,7 +1,7 @@
 // 影视相关路由
 
 import { Router } from 'express';
-import { listVodSources } from '../config.js';
+import { addVodSite, listVodSources, removeVodSite } from '../config.js';
 import {
   searchMovies,
   searchByKeyword,
@@ -55,6 +55,49 @@ moviesRouter.get('/sources', (_req, res) => {
 });
 
 /**
+ * GET /api/movies/sites
+ * VOD 站点完整配置（管理用）
+ */
+moviesRouter.get('/sites', (_req, res) => {
+  res.json({ sites: listVodSources() });
+});
+
+/**
+ * POST /api/movies/sites
+ * 新增 VOD 站点，写入 config.json
+ */
+moviesRouter.post('/sites', (req, res) => {
+  try {
+    const body = req.body as { key?: string; api?: string; name?: string; detail?: string };
+    const sites = addVodSite(String(body.key ?? ''), {
+      api: String(body.api ?? ''),
+      name: String(body.name ?? ''),
+      detail: body.detail ? String(body.detail) : undefined,
+    });
+    res.status(201).json({ sites });
+  } catch (e) {
+    const msg = (e as Error).message;
+    const status = msg.includes('已存在') ? 409 : 400;
+    res.status(status).json({ error: msg });
+  }
+});
+
+/**
+ * DELETE /api/movies/sites/:key
+ * 删除 VOD 站点
+ */
+moviesRouter.delete('/sites/:key', (req, res) => {
+  try {
+    const sites = removeVodSite(req.params.key);
+    res.json({ sites });
+  } catch (e) {
+    const msg = (e as Error).message;
+    const status = msg.includes('不存在') ? 404 : 400;
+    res.status(status).json({ error: msg });
+  }
+});
+
+/**
  * GET /api/movies/categories?source=dyttzy
  * VOD 分类标签
  */
@@ -78,13 +121,13 @@ function parseTypeId(raw: unknown): number | undefined {
 }
 
 /**
- * GET /api/movies?page=1&rows=24&source=dyttzy
+ * GET /api/movies?page=1&rows=20&source=dyttzy
  * 热门/最新列表
  */
 moviesRouter.get('/', async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
-    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 24));
+    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 20));
     const source = resolveSource(req.query.source);
     const typeId = parseTypeId(req.query.type);
 
@@ -113,7 +156,7 @@ moviesRouter.get('/search/global', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const page = Math.max(1, Number(req.query.page) || 1);
-    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 24));
+    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 20));
 
     if (!q) {
       const sourcesTotal = listVodSources().length;
@@ -185,7 +228,7 @@ moviesRouter.get('/search', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const page = Math.max(1, Number(req.query.page) || 1);
-    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 24));
+    const rows = Math.min(48, Math.max(1, Number(req.query.rows) || 20));
     const source = resolveSource(req.query.source);
 
     if (isArchiveSource(source)) {
