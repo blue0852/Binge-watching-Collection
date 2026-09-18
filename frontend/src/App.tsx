@@ -2,6 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import Header from './components/Header.js';
 import Home from './pages/Home.js';
 import MovieDetail from './pages/MovieDetail.js';
+import Sites from './pages/Sites.js';
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/movie/:id" element={<MovieDetail />} />
+          <Route path="/sites" element={<Sites />} />
         </Routes>
       </main>
       <footer className="footer">

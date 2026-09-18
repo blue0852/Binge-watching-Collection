@@ -110,6 +110,9 @@ export default function Header() {
           <span className="logo-text">Public Domain Cinema</span>
         </Link>
         <div className="header-controls">
+          <Link to="/sites" className="header-nav-link">
+            站点管理
+          </Link>
           {sources.length > 0 && (
             <select
               className="source-select"

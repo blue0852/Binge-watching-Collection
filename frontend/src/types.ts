@@ -39,6 +39,17 @@ export interface SourceInfo {
   type: 'archive' | 'vod';
 }
 
+export interface VodSiteEntry {
+  key: string;
+  api: string;
+  name: string;
+  detail?: string;
+}
+
+export interface VodSitesResponse {
+  sites: VodSiteEntry[];
+}
+
 export interface SourcesResponse {
   sources: SourceInfo[];
   defaultSource: string;

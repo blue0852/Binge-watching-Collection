@@ -30,6 +30,8 @@ export function createApp() {
     next();
   });
 
+  app.use(express.json({ limit: '64kb' }));
+
   app.use('/api/img', imagesRouter);
   app.use('/api/movies', moviesRouter);
   app.get('/api/health', (_req, res) => res.json({ ok: true, time: Date.now() }));

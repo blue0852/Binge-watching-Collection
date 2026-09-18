@@ -310,7 +310,7 @@ function normalizeCategories(classList: VodClassItem[]): VodCategory[] {
 export async function listVodMovies(
   source: string,
   page = 1,
-  rows = 24,
+  rows = 20,
   typeId?: number,
 ): Promise<PaginatedResult<MovieListItem>> {
   const site = getVodSite(source);
@@ -351,7 +351,7 @@ export async function searchAllVodMovies(
   keyword: string,
   page = 1,
   rowsPerSite = GLOBAL_SEARCH_ROWS_PER_SITE,
-  maxReturn = 24,
+  maxReturn = 20,
 ): Promise<GlobalSearchResult> {
   const safe = keyword.trim();
   const sources = listVodSources();
@@ -409,7 +409,7 @@ export async function searchVodMovies(
   source: string,
   keyword: string,
   page = 1,
-  rows = 24,
+  rows = 20,
 ): Promise<PaginatedResult<MovieListItem>> {
   const site = getVodSite(source);
   if (!site) throw new Error(`未知资源站: ${source}`);
