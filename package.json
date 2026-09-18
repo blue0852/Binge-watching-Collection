@@ -12,20 +12,25 @@
     "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "build": "npm run build -w backend && npm run build -w frontend",
     "start": "npm run start -w backend",
+    "icon": "node scripts/generate-icon.mjs",
     "prepare:pack": "node scripts/prepare-pack.mjs",
-    "pack:win": "npm run build && npm run prepare:pack && electron-builder --win",
-    "pack:dir": "npm run build && npm run prepare:pack && electron-builder --win dir"
+    "pack:win": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win",
+    "pack:dir": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win dir"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
     "electron": "^33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.33.5"
   },
   "build": {
     "appId": "com.publicdomain.cinema",
     "productName": "Public Domain Cinema",
+    "icon": "build/icon.ico",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "desktop/**/*"

@@ -1,16 +1,26 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Hls from 'hls.js';
 import Pagination from './Pagination.js';
+import { getHistoryEntry, upsertPlayHistory } from '../utils/playHistory.js';
 import type { PlayableFile } from '../types.js';
 
 const EPISODES_PER_PAGE = 20;
 const SEEK_STEP_SECONDS = 10;
+
+export interface PlayHistoryMeta {
+  id: string;
+  thumbnail: string;
+  source?: string;
+  sourceName?: string;
+  year?: string;
+}
 
 interface Props {
   files: PlayableFile[];
   poster?: string;
   title: string;
   sourceLabel?: string;
+  historyMeta?: PlayHistoryMeta;
 }
 
 function lineKey(f: PlayableFile): string {
@@ -23,7 +33,7 @@ function episodeLabel(f: PlayableFile): string {
   return i === -1 ? f.name : f.name.slice(i + 3);
 }
 
-export default function VideoPlayer({ files, poster, title, sourceLabel }: Props) {
+export default function VideoPlayer({ files, poster, title, sourceLabel, historyMeta }: Props) {
   const [activeLine, setActiveLine] = useState('');
   const [current, setCurrent] = useState<PlayableFile | null>(null);
   const [error, setError] = useState(false);
@@ -31,6 +41,8 @@ export default function VideoPlayer({ files, poster, title, sourceLabel }: Props
   const [epPage, setEpPage] = useState(1);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const restoredUrlRef = useRef<string | null>(null);
+  const lastHistorySaveRef = useRef(0);
 
   const lineGroups = useMemo(() => {
     const map = new Map<string, PlayableFile[]>();
@@ -105,6 +117,46 @@ export default function VideoPlayer({ files, poster, title, sourceLabel }: Props
       }
     };
   }, [current]);
+
+  useEffect(() => {
+    restoredUrlRef.current = null;
+  }, [current?.url]);
+
+  const persistHistory = useCallback(
+    (force = false) => {
+      if (!historyMeta || !current || error) return;
+      const video = videoRef.current;
+      if (!video) return;
+      const now = Date.now();
+      if (!force && now - lastHistorySaveRef.current < 4000) return;
+      lastHistorySaveRef.current = now;
+      upsertPlayHistory({
+        id: historyMeta.id,
+        title,
+        thumbnail: historyMeta.thumbnail,
+        source: historyMeta.source,
+        sourceName: historyMeta.sourceName ?? sourceLabel,
+        year: historyMeta.year,
+        episodeLabel: episodeLabel(current),
+        playUrl: current.url,
+        position: video.currentTime,
+        duration: Number.isFinite(video.duration) ? video.duration : undefined,
+      });
+    },
+    [historyMeta, current, error, title, sourceLabel],
+  );
+
+  function restoreHistoryPosition() {
+    if (!historyMeta || !current || restoredUrlRef.current === current.url) return;
+    restoredUrlRef.current = current.url;
+    const hit = getHistoryEntry(historyMeta.id);
+    if (!hit || hit.playUrl !== current.url || hit.position == null || hit.position < 3) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const dur = video.duration;
+    if (Number.isFinite(dur) && hit.position >= dur - 5) return;
+    video.currentTime = hit.position;
+  }
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -209,6 +261,10 @@ export default function VideoPlayer({ files, poster, title, sourceLabel }: Props
               preload="metadata"
               onError={() => setError(true)}
               onEnded={onVideoEnded}
+              onLoadedMetadata={restoreHistoryPosition}
+              onPlaying={() => persistHistory(true)}
+              onTimeUpdate={() => persistHistory(false)}
+              onPause={() => persistHistory(true)}
             >
               您的浏览器不支持 HTML5 视频播放。
             </video>

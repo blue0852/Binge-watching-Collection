@@ -84,6 +84,13 @@ export default function MovieDetailPage() {
         poster={proxyImageUrl(movie.thumbnail)}
         title={movie.title}
         sourceLabel={movie.sourceName}
+        historyMeta={{
+          id: movie.id,
+          thumbnail: movie.thumbnail,
+          source: movie.source,
+          sourceName: movie.sourceName,
+          year: movie.year,
+        }}
       />
 
       <div className="detail-info">

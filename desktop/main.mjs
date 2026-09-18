@@ -83,12 +83,14 @@ function startBackend() {
 }
 
 function createWindow() {
+  const windowIcon = path.join(__dirname, 'icon.ico');
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 960,
     minHeight: 600,
     title: 'Public Domain Cinema',
+    icon: windowIcon,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
