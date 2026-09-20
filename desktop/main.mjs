@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog } from 'electron';
 import { fork } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -13,6 +14,24 @@ const appRoot = isPackaged
 let mainWindow = null;
 let serverProcess = null;
 let serverPort = 3002;
+
+/** 开发：项目根 config.json；便携版：exe 同目录；安装版：userData（Program Files 不可写） */
+function resolveConfigPath() {
+  const bundledConfigPath = path.join(appRoot, 'config.json');
+  if (!isPackaged) return bundledConfigPath;
+
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  const configDir = portableDir || app.getPath('userData');
+  const userConfigPath = path.join(configDir, 'config.json');
+
+  if (!existsSync(userConfigPath)) {
+    mkdirSync(configDir, { recursive: true });
+    const legacyPath = path.join(app.getPath('userData'), 'config.json');
+    const seedPath = existsSync(legacyPath) ? legacyPath : bundledConfigPath;
+    copyFileSync(seedPath, userConfigPath);
+  }
+  return userConfigPath;
+}
 
 function waitForHealth(port, retries = 40) {
   return new Promise((resolve, reject) => {
@@ -39,20 +58,20 @@ function waitForHealth(port, retries = 40) {
 }
 
 function startBackend() {
-  const serverEntry = path.join(appRoot, 'backend/dist/server.js');
-  const backendDir = path.join(appRoot, 'backend/dist');
-  const nodeModules = path.join(appRoot, 'backend/node_modules');
+  const backendRoot = path.join(appRoot, 'backend');
+  const bundledEntry = path.join(backendRoot, 'dist/server.bundle.mjs');
+  const fallbackEntry = path.join(backendRoot, 'dist/server.js');
+  const serverEntry = existsSync(bundledEntry) ? bundledEntry : fallbackEntry;
 
   serverProcess = fork(serverEntry, [], {
-    cwd: backendDir,
+    cwd: path.join(backendRoot, 'dist'),
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       APP_ROOT: appRoot,
-      CONFIG_PATH: path.join(appRoot, 'config.json'),
+      CONFIG_PATH: resolveConfigPath(),
       FRONTEND_DIST: path.join(appRoot, 'frontend/dist'),
       PORT: '0',
-      NODE_PATH: nodeModules,
     },
     stdio: 'pipe',
   });

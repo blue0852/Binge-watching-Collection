@@ -2,6 +2,7 @@
 
 import { Router } from 'express';
 import { addVodSite, listVodSources, removeVodSite } from '../config.js';
+import { getConfigPath } from '../paths.js';
 import {
   searchMovies,
   searchByKeyword,
@@ -59,7 +60,7 @@ moviesRouter.get('/sources', (_req, res) => {
  * VOD 站点完整配置（管理用）
  */
 moviesRouter.get('/sites', (_req, res) => {
-  res.json({ sites: listVodSources() });
+  res.json({ sites: listVodSources(), configPath: getConfigPath() });
 });
 
 /**
@@ -74,7 +75,7 @@ moviesRouter.post('/sites', (req, res) => {
       name: String(body.name ?? ''),
       detail: body.detail ? String(body.detail) : undefined,
     });
-    res.status(201).json({ sites });
+    res.status(201).json({ sites, configPath: getConfigPath() });
   } catch (e) {
     const msg = (e as Error).message;
     const status = msg.includes('已存在') ? 409 : 400;
@@ -89,7 +90,7 @@ moviesRouter.post('/sites', (req, res) => {
 moviesRouter.delete('/sites/:key', (req, res) => {
   try {
     const sites = removeVodSite(req.params.key);
-    res.json({ sites });
+    res.json({ sites, configPath: getConfigPath() });
   } catch (e) {
     const msg = (e as Error).message;
     const status = msg.includes('不存在') ? 404 : 400;

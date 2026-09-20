@@ -18,12 +18,16 @@ export default function SitesPage() {
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [configPath, setConfigPath] = useState<string | null>(null);
 
   function loadSites() {
     setLoading(true);
     setError(null);
     fetchVodSites()
-      .then((res) => setSites(res.sites))
+      .then((res) => {
+        setSites(res.sites);
+        if (res.configPath) setConfigPath(res.configPath);
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }
@@ -45,6 +49,7 @@ export default function SitesPage() {
     })
       .then((res) => {
         setSites(res.sites);
+        if (res.configPath) setConfigPath(res.configPath);
         setForm(emptyForm());
         setMessage('站点已添加并写入 config.json');
       })
@@ -61,6 +66,7 @@ export default function SitesPage() {
     deleteVodSite(site.key)
       .then((res) => {
         setSites(res.sites);
+        if (res.configPath) setConfigPath(res.configPath);
         setMessage(`已删除「${site.name}」`);
       })
       .catch((err: Error) => setError(err.message))
@@ -74,8 +80,13 @@ export default function SitesPage() {
       </div>
       <h1 className="sites-title">VOD 站点管理</h1>
       <p className="sites-desc hint">
-        在此添加或删除 MacCMS 风格资源站，变更会立即写入项目根目录的{' '}
-        <code>config.json</code>。Internet Archive 为内置数据源，不在此列表中。
+        在此添加或删除 MacCMS 风格资源站，变更会立即写入{' '}
+        {configPath ? (
+          <code>{configPath}</code>
+        ) : (
+          <code>config.json</code>
+        )}
+        。Internet Archive 为内置数据源，不在此列表中。
       </p>
 
       {error && <div className="error-box sites-flash">{error}</div>}

@@ -1,7 +1,7 @@
 // MacCMS 风格 VOD 采集 API 客户端
 
-import fetch from 'node-fetch';
 import { getCacheTtlMs, getVodSite, listVodSources, type VodSiteConfig } from '../config.js';
+import { fetchUpstreamText } from './upstreamFetch.js';
 import type {
   GlobalSearchResult,
   MovieDetail,
@@ -84,19 +84,12 @@ function candidateFetchUrls(url: string): string[] {
 }
 
 async function fetchVodApi(url: string): Promise<VodApiResponse> {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  };
   let lastError: Error | null = null;
 
   for (const tryUrl of candidateFetchUrls(url)) {
     try {
-      const res = await fetch(tryUrl, { timeout: 15000, headers } as never);
-      if (!res.ok) {
-        lastError = new Error(`VOD API 请求失败: ${res.status}`);
-        continue;
-      }
-      const data = (await res.json()) as VodApiResponse;
+      const text = await fetchUpstreamText(tryUrl);
+      const data = JSON.parse(text) as VodApiResponse;
       if (data.code !== undefined && data.code !== 1) {
         throw new Error(data.msg || 'VOD API 返回错误');
       }
@@ -424,8 +417,10 @@ export async function searchVodMovies(
     const data = await fetchVodApi(url);
     const list = data.list ?? [];
     const limit = Number(data.limit) || rows;
+    const items = list.map((v) => toListItem(source, site.name, v, site));
+    const enriched = await enrichWithThumbnails(source, site, items);
     return {
-      items: list.map((v) => toListItem(source, site.name, v, site)),
+      items: enriched,
       total: data.total ?? list.length,
       page: data.page ?? page,
       rows: limit,
