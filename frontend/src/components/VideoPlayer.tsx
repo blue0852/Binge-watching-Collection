@@ -2,10 +2,49 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Hls from 'hls.js';
 import Pagination from './Pagination.js';
 import { getHistoryEntry, upsertPlayHistory } from '../utils/playHistory.js';
+import { getPlayerSettings, savePlayerSettings } from '../utils/playerSettings.js';
+import { proxyStreamUrl } from '../utils/streamUrl.js';
 import type { PlayableFile } from '../types.js';
 
 const EPISODES_PER_PAGE = 20;
 const SEEK_STEP_SECONDS = 10;
+
+function IconPrev() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z" />
+    </svg>
+  );
+}
+
+function IconNext() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M16 6h2v12h-2V6zM6 18l8.5-6L6 6v12z" />
+    </svg>
+  );
+}
+
+function IconPlay() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M8 5v14l11-7L8 5z" />
+    </svg>
+  );
+}
+
+function IconPause() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" />
+    </svg>
+  );
+}
+
+/** 视为「从头播放」的最大时间（秒），在此范围内自动跳过片头 */
+const AUTO_INTRO_MAX_START_SECONDS = 3;
+/** 与浏览器原生控件接近的自动隐藏延迟 */
+const CONTROLS_HIDE_DELAY_MS = 2500;
 
 export interface PlayHistoryMeta {
   id: string;
@@ -39,10 +78,18 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
   const [error, setError] = useState(false);
   const [continuousPlay, setContinuousPlay] = useState(true);
   const [epPage, setEpPage] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [playerSettings, setPlayerSettings] = useState(getPlayerSettings);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const restoredUrlRef = useRef<string | null>(null);
   const lastHistorySaveRef = useRef(0);
+  const hideControlsTimerRef = useRef<number | null>(null);
+  const outroSkippedRef = useRef(false);
+  const [introSkipped, setIntroSkipped] = useState(false);
 
   const lineGroups = useMemo(() => {
     const map = new Map<string, PlayableFile[]>();
@@ -94,18 +141,20 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
       current.url.includes('.m3u8') ||
       current.mimetype.includes('mpegurl');
 
+    const playUrl = proxyStreamUrl(current.url);
+
     if (isM3u8 && Hls.isSupported()) {
       const hls = new Hls();
       hlsRef.current = hls;
-      hls.loadSource(current.url);
+      hls.loadSource(playUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data.fatal) setError(true);
       });
     } else if (isM3u8 && video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = current.url;
+      video.src = playUrl;
     } else {
-      video.src = current.url;
+      video.src = playUrl;
     }
 
     void video.play().catch(() => {});
@@ -120,7 +169,22 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
 
   useEffect(() => {
     restoredUrlRef.current = null;
+    setIntroSkipped(false);
+    setPlaybackTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    outroSkippedRef.current = false;
   }, [current?.url]);
+
+  const applySeek = useCallback((target: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(target)) return;
+    const clamped = Number.isFinite(video.duration)
+      ? Math.max(0, Math.min(video.duration - 0.1, target))
+      : Math.max(0, target);
+    video.currentTime = clamped;
+    setPlaybackTime(clamped);
+  }, []);
 
   const persistHistory = useCallback(
     (force = false) => {
@@ -156,6 +220,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
     const dur = video.duration;
     if (Number.isFinite(dur) && hit.position >= dur - 5) return;
     video.currentTime = hit.position;
+    if (hit.position >= playerSettings.introSkipSeconds) setIntroSkipped(true);
   }
 
   useEffect(() => {
@@ -212,6 +277,101 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
     }
   }, [currentIndex, lineFiles.length, goToEpisodeIndex]);
 
+  const scheduleHideControls = useCallback(() => {
+    if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
+    hideControlsTimerRef.current = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (video && !video.paused) setControlsVisible(false);
+    }, CONTROLS_HIDE_DELAY_MS);
+  }, []);
+
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    scheduleHideControls();
+  }, [scheduleHideControls]);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      setControlsVisible(true);
+      if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
+      return;
+    }
+    scheduleHideControls();
+  }, [isPlaying, scheduleHideControls]);
+
+  useEffect(
+    () => () => {
+      if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
+    },
+    [],
+  );
+
+  const togglePlayPause = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || error) return;
+    revealControls();
+    if (video.paused) void video.play().catch(() => {});
+    else video.pause();
+  }, [error, revealControls]);
+
+  const skipIntro = useCallback(() => {
+    if (playerSettings.introSkipSeconds <= 0) return;
+    applySeek(playerSettings.introSkipSeconds);
+    setIntroSkipped(true);
+  }, [playerSettings.introSkipSeconds, applySeek]);
+
+  const skipOutro = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration)) return;
+    outroSkippedRef.current = true;
+    applySeek(video.duration - 0.5);
+  }, [applySeek]);
+
+  const tryAutoSkipIntro = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || introSkipped || playerSettings.introSkipSeconds <= 0) return;
+    if (video.currentTime >= AUTO_INTRO_MAX_START_SECONDS) return;
+    applySeek(playerSettings.introSkipSeconds);
+    setIntroSkipped(true);
+  }, [introSkipped, playerSettings.introSkipSeconds, applySeek]);
+
+  const tryAutoSkipOutro = useCallback(
+    (currentTime: number, totalDuration: number) => {
+      if (outroSkippedRef.current || playerSettings.outroSkipSeconds <= 0) return;
+      if (!Number.isFinite(totalDuration) || totalDuration <= playerSettings.outroSkipSeconds) return;
+      if (currentTime <= playerSettings.introSkipSeconds) return;
+      if (totalDuration - currentTime > playerSettings.outroSkipSeconds) {
+        outroSkippedRef.current = false;
+        return;
+      }
+      outroSkippedRef.current = true;
+      applySeek(totalDuration - 0.5);
+    },
+    [playerSettings.introSkipSeconds, playerSettings.outroSkipSeconds, applySeek],
+  );
+
+  const showSkipIntro =
+    !introSkipped &&
+    playerSettings.introSkipSeconds > 0 &&
+    playbackTime < playerSettings.introSkipSeconds;
+
+  const showSkipOutro =
+    playerSettings.outroSkipSeconds > 0 &&
+    Number.isFinite(duration) &&
+    duration > playerSettings.outroSkipSeconds &&
+    duration - playbackTime <= playerSettings.outroSkipSeconds &&
+    playbackTime > playerSettings.introSkipSeconds;
+
+  function updateIntroSkipSetting(raw: string) {
+    const value = Number.parseInt(raw, 10);
+    setPlayerSettings(savePlayerSettings({ introSkipSeconds: Number.isNaN(value) ? 0 : value }));
+  }
+
+  function updateOutroSkipSetting(raw: string) {
+    const value = Number.parseInt(raw, 10);
+    setPlayerSettings(savePlayerSettings({ outroSkipSeconds: Number.isNaN(value) ? 0 : value }));
+  }
+
   function onVideoEnded() {
     if (continuousPlay) playNextEpisode();
   }
@@ -252,54 +412,141 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
           </div>
         ) : (
           current && (
-            <video
-              ref={videoRef}
-              controls
-              autoPlay
-              playsInline
-              poster={poster}
-              preload="metadata"
-              onError={() => setError(true)}
-              onEnded={onVideoEnded}
-              onLoadedMetadata={restoreHistoryPosition}
-              onPlaying={() => persistHistory(true)}
-              onTimeUpdate={() => persistHistory(false)}
-              onPause={() => persistHistory(true)}
+            <div
+              className="player-video-inner"
+              onMouseMove={revealControls}
+              onMouseLeave={() => {
+                if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
+                if (isPlaying) setControlsVisible(false);
+              }}
             >
-              您的浏览器不支持 HTML5 视频播放。
-            </video>
+              <video
+                ref={videoRef}
+                controls
+                autoPlay
+                playsInline
+                poster={poster}
+                preload="metadata"
+                onMouseMove={revealControls}
+                onError={() => setError(true)}
+                onEnded={onVideoEnded}
+                onLoadedMetadata={(e) => {
+                  restoreHistoryPosition();
+                  const v = e.currentTarget;
+                  setDuration(Number.isFinite(v.duration) ? v.duration : 0);
+                }}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => {
+                  setIsPlaying(false);
+                  persistHistory(true);
+                }}
+                onPlaying={() => {
+                  setIsPlaying(true);
+                  tryAutoSkipIntro();
+                  persistHistory(true);
+                }}
+                onTimeUpdate={(e) => {
+                  const v = e.currentTarget;
+                  const t = v.currentTime;
+                  const dur = Number.isFinite(v.duration) ? v.duration : duration;
+                  setPlaybackTime(t);
+                  if (Number.isFinite(v.duration)) setDuration(v.duration);
+                  if (Number.isFinite(dur) && dur > 0) tryAutoSkipOutro(t, dur);
+                  persistHistory(false);
+                }}
+              >
+                您的浏览器不支持 HTML5 视频播放。
+              </video>
+
+              <div className="player-overlay-controls">
+                {showSkipIntro && (
+                  <button type="button" className="player-skip-btn" onClick={skipIntro}>
+                    跳过片头
+                  </button>
+                )}
+                {showSkipOutro && (
+                  <button type="button" className="player-skip-btn" onClick={skipOutro}>
+                    跳过片尾
+                  </button>
+                )}
+
+                {current && (
+                  <div className="player-ep-badge">
+                    {lineFiles.length > 1
+                      ? `${episodeLabel(current)}（${currentIndex + 1}/${lineFiles.length}）`
+                      : episodeLabel(current)}
+                  </div>
+                )}
+
+                <div
+                  className={`player-center-bar${controlsVisible ? ' visible' : ''}`}
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseMove={(e) => {
+                    e.stopPropagation();
+                    revealControls();
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="player-icon-btn"
+                    disabled={currentIndex <= 0}
+                    onClick={playPrevEpisode}
+                    title="上一集"
+                    aria-label="上一集"
+                  >
+                    <IconPrev />
+                  </button>
+                  <button
+                    type="button"
+                    className="player-icon-btn player-icon-btn-main"
+                    onClick={togglePlayPause}
+                    title={isPlaying ? '暂停' : '播放'}
+                    aria-label={isPlaying ? '暂停' : '播放'}
+                  >
+                    {isPlaying ? <IconPause /> : <IconPlay />}
+                  </button>
+                  <button
+                    type="button"
+                    className="player-icon-btn"
+                    disabled={currentIndex < 0 || currentIndex >= lineFiles.length - 1}
+                    onClick={playNextEpisode}
+                    title="下一集"
+                    aria-label="下一集"
+                  >
+                    <IconNext />
+                  </button>
+                </div>
+              </div>
+            </div>
           )
         )}
       </div>
 
-      <div className="player-episode-nav">
-        <button
-          type="button"
-          className="btn btn-episode-nav"
-          disabled={currentIndex <= 0}
-          onClick={playPrevEpisode}
-        >
-          上一集
-        </button>
-        {current && lineFiles.length > 1 && (
-          <span className="now-playing-ep">
-            {episodeLabel(current)}（{currentIndex + 1}/{lineFiles.length}）
-          </span>
-        )}
-        {current && lineFiles.length <= 1 && (
-          <span className="now-playing-ep">{episodeLabel(current)}</span>
-        )}
-        <button
-          type="button"
-          className="btn btn-episode-nav"
-          disabled={currentIndex < 0 || currentIndex >= lineFiles.length - 1}
-          onClick={playNextEpisode}
-        >
-          下一集
-        </button>
-      </div>
-
       <div className="player-options">
+        <label className="skip-setting">
+          <span>片头跳过</span>
+          <input
+            type="number"
+            min={0}
+            max={600}
+            step={1}
+            value={playerSettings.introSkipSeconds}
+            onChange={(e) => updateIntroSkipSetting(e.target.value)}
+          />
+          <span className="skip-unit">秒</span>
+        </label>
+        <label className="skip-setting">
+          <span>片尾跳过</span>
+          <input
+            type="number"
+            min={0}
+            max={600}
+            step={1}
+            value={playerSettings.outroSkipSeconds}
+            onChange={(e) => updateOutroSkipSetting(e.target.value)}
+          />
+          <span className="skip-unit">秒</span>
+        </label>
         <label className="continuous-toggle">
           <input
             type="checkbox"

@@ -230,6 +230,11 @@
       "api": "https://api.maoyanapi.top/api.php/provide/vod",
       "name": "猫眼资源",
       "detail": "https://api.maoyanapi.top"
+    },
+    "danaizi": {
+      "api": "https://apidanaizi.com/api.php/provide/vod",
+      "name": "test",
+      "detail": "https://apidanaizi.com"
     }
   }
 }

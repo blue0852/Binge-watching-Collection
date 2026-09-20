@@ -48,6 +48,7 @@ export interface VodSiteEntry {
 
 export interface VodSitesResponse {
   sites: VodSiteEntry[];
+  configPath?: string;
 }
 
 export interface SourcesResponse {

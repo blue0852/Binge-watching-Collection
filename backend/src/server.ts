@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
 import { moviesRouter } from './routes/movies.js';
 import { imagesRouter } from './routes/images.js';
+import { streamRouter } from './routes/stream.js';
 import { getFrontendDistPath } from './paths.js';
 
 /** 解析端口；PORT=0 表示由系统分配空闲端口（桌面 exe 使用） */
@@ -33,6 +34,7 @@ export function createApp() {
   app.use(express.json({ limit: '64kb' }));
 
   app.use('/api/img', imagesRouter);
+  app.use('/api/stream', streamRouter);
   app.use('/api/movies', moviesRouter);
   app.get('/api/health', (_req, res) => res.json({ ok: true, time: Date.now() }));
 
@@ -67,8 +69,12 @@ const isDirectRun =
   process.argv[1] &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
-if (isDirectRun) {
-  startServer(DEFAULT_PORT).catch((err) => {
+/** Electron 子进程 fork 后端时 import.meta 路径可能与 argv 不完全一致 */
+const isDesktopBackend =
+  process.env.ELECTRON_RUN_AS_NODE === '1' && Boolean(process.argv[1]?.includes('server'));
+
+if (isDirectRun || isDesktopBackend) {
+  startServer(resolvePort()).catch((err) => {
     console.error(err);
     process.exit(1);
   });

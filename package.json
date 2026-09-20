@@ -15,12 +15,14 @@
     "icon": "node scripts/generate-icon.mjs",
     "prepare:pack": "node scripts/prepare-pack.mjs",
     "pack:win": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win",
+    "pack:portable": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win portable",
     "pack:dir": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win dir"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
+    "esbuild": "^0.25.12",
     "png-to-ico": "^2.1.8",
     "sharp": "^0.33.5"
   },

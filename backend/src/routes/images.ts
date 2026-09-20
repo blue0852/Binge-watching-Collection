@@ -1,9 +1,19 @@
-// 图片代理：绕过 CDN 防盗链
+// 图片代理：绕过 CDN 防盗链 / WAF / 自签证书
 
 import { Router } from 'express';
-import fetch from 'node-fetch';
+import { fetchUpstreamBuffer } from '../services/upstreamFetch.js';
 
 export const imagesRouter = Router();
+
+function isImageContent(contentType: string, buffer: Buffer): boolean {
+  if (contentType.startsWith('image/')) return true;
+  const sig = buffer.subarray(0, 12);
+  if (sig[0] === 0xff && sig[1] === 0xd8) return true;
+  if (sig[0] === 0x89 && sig[1] === 0x50) return true;
+  if (sig[0] === 0x47 && sig[1] === 0x49) return true;
+  if (sig[0] === 0x52 && sig[1] === 0x49) return true;
+  return false;
+}
 
 /**
  * GET /api/img?url=https://...
@@ -16,9 +26,6 @@ imagesRouter.get('/', async (req, res) => {
     return;
   }
 
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  };
   const tryUrls = [raw];
   if (raw.startsWith('https://')) {
     tryUrls.push(raw.replace(/^https:\/\//, 'http://'));
@@ -27,22 +34,14 @@ imagesRouter.get('/', async (req, res) => {
   let lastError: Error | null = null;
   for (const target of tryUrls) {
     try {
-      const origin = new URL(target).origin;
-      const upstream = await fetch(target, {
-        timeout: 10000,
-        headers: { ...headers, Referer: `${origin}/` },
-      } as never);
-
-      if (!upstream.ok) {
-        lastError = new Error(`图片获取失败: ${upstream.status}`);
+      const { buffer, contentType } = await fetchUpstreamBuffer(target);
+      if (!isImageContent(contentType, buffer)) {
+        lastError = new Error('上游返回非图片内容');
         continue;
       }
-
-      const contentType = upstream.headers.get('content-type') || 'image/jpeg';
-      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Type', contentType.startsWith('image/') ? contentType : 'image/jpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      const buf = Buffer.from(await upstream.arrayBuffer());
-      res.send(buf);
+      res.send(buffer);
       return;
     } catch (e) {
       lastError = e as Error;

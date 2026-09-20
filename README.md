@@ -50,6 +50,12 @@ npm install
 npm run pack:win
 ```
 
+仅打便携版（跳过安装包，更快、避免 NSIS 压缩中断）：
+
+```bash
+npm run pack:portable
+```
+
 产物在 `release/` 目录：
 
 | 文件 | 说明 |
@@ -60,6 +66,8 @@ npm run pack:win
 仅生成未压缩目录（调试打包用）：`npm run pack:dir`
 
 打包前会自动执行 `npm run build` 与 `prepare:pack`（复制构建产物并在 `pack/app` 安装后端运行时依赖）。首次打包会下载 Electron，体积约 150MB+，属正常现象。
+
+**桌面版配置路径**：便携版将 `config.json` 保存在 **exe 同目录**（U 盘拷贝时配置一并带走）；安装版保存在 `%APPDATA%\Public Domain Cinema\config.json`（安装目录通常不可写）。首次启动从内置默认配置复制；在「站点管理」页可查看实际路径。
 
 **发布说明**：`release/` 已在 `.gitignore` 中，**不要将 exe 提交到 Git 仓库**（避免仓库体积膨胀）。打包完成后，在 GitHub **Releases** 页创建新版本，将 `release/` 下的 portable / setup 安装包作为**附件**上传即可。
 
