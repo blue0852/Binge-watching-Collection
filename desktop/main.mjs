@@ -18,7 +18,12 @@ let serverPort = 3002;
 /** 开发：项目根 config.json；便携版：exe 同目录；安装版：userData（Program Files 不可写） */
 function resolveConfigPath() {
   const bundledConfigPath = path.join(appRoot, 'config.json');
-  if (!isPackaged) return bundledConfigPath;
+  if (!isPackaged) {
+    if (process.env.CONFIG_PATH && existsSync(process.env.CONFIG_PATH)) {
+      return process.env.CONFIG_PATH;
+    }
+    return bundledConfigPath;
+  }
 
   const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
   const configDir = portableDir || app.getPath('userData');

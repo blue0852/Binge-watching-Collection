@@ -1,7 +1,10 @@
 // 流媒体代理：绕过 CDN 防盗链 / CORS / 自签证书，并重写 m3u8 分片地址
 
 import { Router } from 'express';
-import { fetchUpstreamBuffer } from '../services/upstreamFetch.js';
+import {
+  fetchUpstreamBuffer,
+  pipeUpstreamToResponse,
+} from '../services/upstreamFetch.js';
 
 export const streamRouter = Router();
 
@@ -13,6 +16,10 @@ function isM3u8Body(url: string, contentType: string, text: string): boolean {
   if (url.includes('.m3u8')) return true;
   if (/mpegurl|m3u8/i.test(contentType)) return true;
   return text.trimStart().startsWith('#EXTM3U');
+}
+
+function urlLooksLikeM3u8(url: string): boolean {
+  return url.includes('.m3u8') || /[?&]m3u8/i.test(url);
 }
 
 function toProxyUrl(absUrl: string): string {
@@ -60,6 +67,11 @@ streamRouter.get('/', async (req, res) => {
   }
 
   try {
+    if (!urlLooksLikeM3u8(raw)) {
+      await pipeUpstreamToResponse(raw, req, res);
+      return;
+    }
+
     const { buffer, contentType } = await fetchUpstreamBuffer(raw);
     const text = buffer.toString('utf8');
 
@@ -71,10 +83,14 @@ streamRouter.get('/', async (req, res) => {
       return;
     }
 
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.send(buffer);
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(buffer);
+    }
   } catch (e) {
-    res.status(502).json({ error: '流媒体代理失败', detail: (e as Error).message });
+    if (!res.headersSent) {
+      res.status(502).json({ error: '流媒体代理失败', detail: (e as Error).message });
+    }
   }
 });
