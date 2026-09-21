@@ -1,7 +1,9 @@
 // 上游 HTTP 请求：Node fetch + 自签证书容忍；Windows 下 WAF 拦截时回退系统 TLS
 
 import { execFile } from 'node:child_process';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import https from 'node:https';
+import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import fetch from 'node-fetch';
 
@@ -178,9 +180,92 @@ export async function fetchUpstreamBuffer(
   }
 }
 
-function guessContentType(url: string): string {
+export function guessContentType(url: string): string {
   if (url.includes('.m3u8')) return 'application/vnd.apple.mpegurl';
   if (url.includes('.ts')) return 'video/mp2t';
   if (url.includes('.mp4')) return 'video/mp4';
   return 'application/octet-stream';
+}
+
+const STREAM_FORWARD_HEADERS = [
+  'content-type',
+  'content-length',
+  'content-range',
+  'accept-ranges',
+  'etag',
+  'last-modified',
+] as const;
+
+/** 流式转发上游媒体（支持 Range），避免整段缓冲后再下发 */
+export async function pipeUpstreamToResponse(
+  url: string,
+  clientReq: IncomingMessage,
+  clientRes: ServerResponse,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    ...buildHeaders(url),
+    Accept: '*/*',
+  };
+  const range = clientReq.headers.range;
+  if (typeof range === 'string') headers.Range = range;
+
+  const isHttps = url.startsWith('https://');
+  let upstream: Awaited<ReturnType<typeof fetch>>;
+  try {
+    upstream = await fetch(url, {
+      headers,
+      agent: isHttps ? insecureAgent : undefined,
+    } as never);
+  } catch (e) {
+    if (process.platform !== 'win32') throw e;
+    const { buffer, contentType } = await fetchUpstreamBuffer(url);
+    if (clientRes.headersSent) return;
+    clientRes.setHeader('Content-Type', contentType);
+    clientRes.setHeader('Cache-Control', 'public, max-age=3600');
+    clientRes.setHeader('Accept-Ranges', 'bytes');
+    clientRes.statusCode = 200;
+    clientRes.end(buffer);
+    return;
+  }
+
+  if (!upstream.ok && upstream.status !== 206) {
+    throw new Error(`上游请求失败: ${upstream.status}`);
+  }
+
+  for (const name of STREAM_FORWARD_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) clientRes.setHeader(name, value);
+  }
+  if (!upstream.headers.get('accept-ranges')) {
+    clientRes.setHeader('Accept-Ranges', 'bytes');
+  }
+  clientRes.setHeader('Cache-Control', 'public, max-age=3600');
+  clientRes.statusCode = upstream.status;
+
+  const body = upstream.body as unknown as Readable | null;
+  if (!body) {
+    clientRes.end();
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const done = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve();
+    };
+
+    const onClientClose = () => {
+      body.destroy();
+    };
+    clientReq.once('close', onClientClose);
+
+    body.on('error', (err: Error) => done(err));
+    clientRes.on('error', (err) => done(err));
+    clientRes.on('finish', () => done());
+
+    body.pipe(clientRes);
+  });
 }

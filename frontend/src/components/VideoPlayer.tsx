@@ -9,6 +9,17 @@ import type { PlayableFile } from '../types.js';
 const EPISODES_PER_PAGE = 20;
 const SEEK_STEP_SECONDS = 10;
 
+/** HLS 缓冲与预加载，减轻代理链路下的卡顿 */
+const HLS_PLAYER_CONFIG: Partial<Hls['config']> = {
+  enableWorker: true,
+  startFragPrefetch: true,
+  maxBufferLength: 30,
+  maxMaxBufferLength: 120,
+  maxBufferSize: 80 * 1000 * 1000,
+  maxBufferHole: 0.5,
+  backBufferLength: 60,
+};
+
 function IconPrev() {
   return (
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
@@ -39,6 +50,35 @@ function IconPause() {
       <path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" />
     </svg>
   );
+}
+
+function IconFullscreenEnter() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"
+      />
+    </svg>
+  );
+}
+
+function IconFullscreenExit() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"
+      />
+    </svg>
+  );
+}
+
+function getFullscreenElement(): Element | null {
+  const doc = document as Document & {
+    webkitFullscreenElement?: Element | null;
+  };
+  return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
 }
 
 /** 视为「从头播放」的最大时间（秒），在此范围内自动跳过片头 */
@@ -83,7 +123,9 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
   const [duration, setDuration] = useState(0);
   const [playerSettings, setPlayerSettings] = useState(getPlayerSettings);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const restoredUrlRef = useRef<string | null>(null);
   const lastHistorySaveRef = useRef(0);
@@ -144,7 +186,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
     const playUrl = proxyStreamUrl(current.url);
 
     if (isM3u8 && Hls.isSupported()) {
-      const hls = new Hls();
+      const hls = new Hls(HLS_PLAYER_CONFIG);
       hlsRef.current = hls;
       hls.loadSource(playUrl);
       hls.attachMedia(video);
@@ -306,6 +348,39 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
     [],
   );
 
+  useEffect(() => {
+    function onFullscreenChange() {
+      const container = playerContainerRef.current;
+      setIsFullscreen(Boolean(container && getFullscreenElement() === container));
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const container = playerContainerRef.current;
+    if (!container) return;
+    revealControls();
+    const active = getFullscreenElement();
+    if (active === container) {
+      if (document.exitFullscreen) void document.exitFullscreen();
+      else {
+        const doc = document as Document & { webkitExitFullscreen?: () => void };
+        doc.webkitExitFullscreen?.();
+      }
+      return;
+    }
+    if (container.requestFullscreen) void container.requestFullscreen();
+    else {
+      const el = container as HTMLDivElement & { webkitRequestFullscreen?: () => void };
+      el.webkitRequestFullscreen?.();
+    }
+  }, [revealControls]);
+
   const togglePlayPause = useCallback(() => {
     const video = videoRef.current;
     if (!video || error) return;
@@ -413,6 +488,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
         ) : (
           current && (
             <div
+              ref={playerContainerRef}
               className="player-video-inner"
               onMouseMove={revealControls}
               onMouseLeave={() => {
@@ -423,6 +499,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
               <video
                 ref={videoRef}
                 controls
+                controlsList="nofullscreen"
                 autoPlay
                 playsInline
                 poster={poster}
@@ -514,6 +591,15 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
                     aria-label="下一集"
                   >
                     <IconNext />
+                  </button>
+                  <button
+                    type="button"
+                    className="player-icon-btn player-icon-btn-fs"
+                    onClick={toggleFullscreen}
+                    title={isFullscreen ? '退出全屏' : '全屏'}
+                    aria-label={isFullscreen ? '退出全屏' : '全屏'}
+                  >
+                    {isFullscreen ? <IconFullscreenExit /> : <IconFullscreenEnter />}
                   </button>
                 </div>
               </div>
