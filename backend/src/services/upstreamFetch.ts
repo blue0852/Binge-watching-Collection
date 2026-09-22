@@ -1,14 +1,22 @@
 // 上游 HTTP 请求：Node fetch + 自签证书容忍；Windows 下 WAF 拦截时回退系统 TLS
 
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import https from 'node:https';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import fetch from 'node-fetch';
+import { isCacheableSegmentUrl, putCachedSegment } from './streamSegmentCache.js';
 
 const execFileAsync = promisify(execFile);
-const insecureAgent = new https.Agent({ rejectUnauthorized: false });
+const AGENT_OPTS = { keepAlive: true, maxSockets: 64, keepAliveMsecs: 30_000 };
+const httpAgent = new http.Agent(AGENT_OPTS);
+const httpsAgent = new https.Agent({ ...AGENT_OPTS, rejectUnauthorized: false });
+
+function agentFor(url: string): http.Agent | https.Agent {
+  return url.startsWith('https://') ? httpsAgent : httpAgent;
+}
 
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -90,10 +98,9 @@ async function nodeFetchBuffer(
   headers: Record<string, string>,
   timeoutMs: number,
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  const isHttps = url.startsWith('https://');
   const res = await fetch(url, {
     headers,
-    agent: isHttps ? insecureAgent : undefined,
+    agent: agentFor(url),
     timeout: timeoutMs,
   } as never);
   if (!res.ok) throw new Error(`上游请求失败: ${res.status}`);
@@ -112,10 +119,9 @@ export async function fetchUpstreamText(
   let nodeError: Error | null = null;
 
   try {
-    const isHttps = url.startsWith('https://');
     const res = await fetch(url, {
       headers,
-      agent: isHttps ? insecureAgent : undefined,
+      agent: agentFor(url),
       timeout: 15000,
     } as never);
     if (!res.ok) throw new Error(`上游请求失败: ${res.status}`);
@@ -196,25 +202,33 @@ const STREAM_FORWARD_HEADERS = [
   'last-modified',
 ] as const;
 
+export interface PipeUpstreamOptions {
+  /** 完整分片响应写入内存缓存（HLS ts/m4s） */
+  cacheSegment?: boolean;
+}
+
 /** 流式转发上游媒体（支持 Range），避免整段缓冲后再下发 */
 export async function pipeUpstreamToResponse(
   url: string,
   clientReq: IncomingMessage,
   clientRes: ServerResponse,
+  options?: PipeUpstreamOptions,
 ): Promise<void> {
   const headers: Record<string, string> = {
     ...buildHeaders(url),
     Accept: '*/*',
   };
   const range = clientReq.headers.range;
-  if (typeof range === 'string') headers.Range = range;
+  const hasRange = typeof range === 'string';
+  if (hasRange) headers.Range = range;
+  const shouldCacheSegment =
+    Boolean(options?.cacheSegment) && !hasRange && isCacheableSegmentUrl(url);
 
-  const isHttps = url.startsWith('https://');
   let upstream: Awaited<ReturnType<typeof fetch>>;
   try {
     upstream = await fetch(url, {
       headers,
-      agent: isHttps ? insecureAgent : undefined,
+      agent: agentFor(url),
     } as never);
   } catch (e) {
     if (process.platform !== 'win32') throw e;
@@ -239,7 +253,10 @@ export async function pipeUpstreamToResponse(
   if (!upstream.headers.get('accept-ranges')) {
     clientRes.setHeader('Accept-Ranges', 'bytes');
   }
-  clientRes.setHeader('Cache-Control', 'public, max-age=3600');
+  clientRes.setHeader(
+    'Cache-Control',
+    shouldCacheSegment ? 'public, max-age=86400, immutable' : 'public, max-age=3600',
+  );
   clientRes.statusCode = upstream.status;
 
   const body = upstream.body as unknown as Readable | null;
@@ -247,6 +264,11 @@ export async function pipeUpstreamToResponse(
     clientRes.end();
     return;
   }
+
+  const contentType =
+    upstream.headers.get('content-type') || guessContentType(url);
+  const chunks: Buffer[] = [];
+  let collected = 0;
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -261,6 +283,18 @@ export async function pipeUpstreamToResponse(
       body.destroy();
     };
     clientReq.once('close', onClientClose);
+
+    if (shouldCacheSegment) {
+      body.on('data', (chunk: Buffer) => {
+        collected += chunk.length;
+        if (collected <= 12 * 1024 * 1024) chunks.push(chunk);
+      });
+      body.on('end', () => {
+        if (collected > 0 && collected <= 12 * 1024 * 1024) {
+          putCachedSegment(url, Buffer.concat(chunks), contentType);
+        }
+      });
+    }
 
     body.on('error', (err: Error) => done(err));
     clientRes.on('error', (err) => done(err));

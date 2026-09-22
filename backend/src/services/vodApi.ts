@@ -1,6 +1,7 @@
 // MacCMS 风格 VOD 采集 API 客户端
 
 import { getCacheTtlMs, getVodSite, listVodSources, type VodSiteConfig } from '../config.js';
+import { apiCache } from './memoryCache.js';
 import { fetchUpstreamText } from './upstreamFetch.js';
 import type {
   GlobalSearchResult,
@@ -14,21 +15,8 @@ import type {
 const GLOBAL_SEARCH_BATCH = 12;
 const GLOBAL_SEARCH_ROWS_PER_SITE = 6;
 
-/** 简单内存缓存 */
-interface CacheEntry<T> {
-  value: T;
-  expireAt: number;
-}
-const cache = new Map<string, CacheEntry<unknown>>();
-
-async function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
-  const hit = cache.get(key);
-  if (hit && hit.expireAt > Date.now()) {
-    return hit.value as T;
-  }
-  const value = await factory();
-  cache.set(key, { value, expireAt: Date.now() + getCacheTtlMs() });
-  return value;
+function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
+  return apiCache.cached(key, getCacheTtlMs(), factory);
 }
 
 /** MacCMS API 返回的列表项 */

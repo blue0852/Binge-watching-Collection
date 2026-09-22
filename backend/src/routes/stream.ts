@@ -5,6 +5,12 @@ import {
   fetchUpstreamBuffer,
   pipeUpstreamToResponse,
 } from '../services/upstreamFetch.js';
+import {
+  getCachedPlaylist,
+  getCachedSegment,
+  isCacheableSegmentUrl,
+  putCachedPlaylist,
+} from '../services/streamSegmentCache.js';
 
 export const streamRouter = Router();
 
@@ -55,6 +61,17 @@ function rewriteM3u8(text: string, baseUrl: string): string {
     .join('\n');
 }
 
+function sendCachedSegment(
+  res: import('express').Response,
+  entry: { body: Buffer; contentType: string },
+): void {
+  res.setHeader('Content-Type', entry.contentType);
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('X-Stream-Cache', 'HIT');
+  res.status(200).end(entry.body);
+}
+
 /**
  * GET /api/stream?url=https://...
  * 代理 m3u8 / ts / mp4
@@ -68,7 +85,25 @@ streamRouter.get('/', async (req, res) => {
 
   try {
     if (!urlLooksLikeM3u8(raw)) {
-      await pipeUpstreamToResponse(raw, req, res);
+      if (isCacheableSegmentUrl(raw) && !req.headers.range) {
+        const hit = getCachedSegment(raw);
+        if (hit) {
+          sendCachedSegment(res, hit);
+          return;
+        }
+      }
+      await pipeUpstreamToResponse(raw, req, res, {
+        cacheSegment: isCacheableSegmentUrl(raw),
+      });
+      return;
+    }
+
+    const cachedPlaylist = getCachedPlaylist(raw);
+    if (cachedPlaylist) {
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, max-age=45');
+      res.setHeader('X-Stream-Cache', 'HIT');
+      res.send(cachedPlaylist);
       return;
     }
 
@@ -77,8 +112,9 @@ streamRouter.get('/', async (req, res) => {
 
     if (isM3u8Body(raw, contentType, text)) {
       const rewritten = rewriteM3u8(text, raw);
+      putCachedPlaylist(raw, rewritten);
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Cache-Control', 'private, max-age=45');
       res.send(rewritten);
       return;
     }

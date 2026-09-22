@@ -16,13 +16,21 @@ export default function CategoryBar({ source }: Props) {
   const selectedType = Number(params.get('type')) || 0;
 
   useEffect(() => {
+    let cancelled = false;
     if (source === 'archive') {
       setCategories([]);
       return;
     }
     fetchCategories(source)
-      .then((res) => setCategories(res.categories))
-      .catch(() => setCategories([]));
+      .then((res) => {
+        if (!cancelled) setCategories(res.categories);
+      })
+      .catch(() => {
+        if (!cancelled) setCategories([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [source]);
 
   const roots = useMemo(

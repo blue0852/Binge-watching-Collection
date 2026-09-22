@@ -9,15 +9,26 @@ import type { PlayableFile } from '../types.js';
 const EPISODES_PER_PAGE = 20;
 const SEEK_STEP_SECONDS = 10;
 
-/** HLS 缓冲与预加载，减轻代理链路下的卡顿 */
+/** m3u8 / HLS 专用：预取分片、容错与缓冲 */
 const HLS_PLAYER_CONFIG: Partial<Hls['config']> = {
   enableWorker: true,
+  autoStartLoad: true,
   startFragPrefetch: true,
-  maxBufferLength: 30,
-  maxMaxBufferLength: 120,
-  maxBufferSize: 80 * 1000 * 1000,
-  maxBufferHole: 0.5,
-  backBufferLength: 60,
+  testBandwidth: false,
+  maxBufferLength: 35,
+  maxMaxBufferLength: 150,
+  maxBufferSize: 100 * 1000 * 1000,
+  maxBufferHole: 0.35,
+  backBufferLength: 30,
+  maxStarvationDelay: 4,
+  maxLoadingDelay: 4,
+  nudgeOnVideoHole: true,
+  nudgeOffset: 0.1,
+  fragLoadingTimeOut: 20_000,
+  manifestLoadingTimeOut: 10_000,
+  fragLoadingMaxRetry: 8,
+  manifestLoadingMaxRetry: 4,
+  startLevel: -1,
 };
 
 function IconPrev() {
@@ -112,6 +123,16 @@ function episodeLabel(f: PlayableFile): string {
   return i === -1 ? f.name : f.name.slice(i + 3);
 }
 
+function fileLooksM3u8(f: PlayableFile): boolean {
+  return f.format === 'm3u8' || f.url.includes('.m3u8') || f.mimetype.includes('mpegurl');
+}
+
+/** 多数资源为 m3u8 时优先选 HLS 线路 */
+function pickDefaultLine(lineGroups: Map<string, PlayableFile[]>, names: string[]): string {
+  const hlsLine = names.find((n) => lineGroups.get(n)?.some(fileLooksM3u8));
+  return hlsLine ?? names[0] ?? '';
+}
+
 export default function VideoPlayer({ files, poster, title, sourceLabel, historyMeta }: Props) {
   const [activeLine, setActiveLine] = useState('');
   const [current, setCurrent] = useState<PlayableFile | null>(null);
@@ -152,17 +173,16 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
 
   useEffect(() => {
     if (lineNames.length === 0) return;
-    setActiveLine((prev) => (prev && lineGroups.has(prev) ? prev : lineNames[0]));
+    setActiveLine((prev) =>
+      prev && lineGroups.has(prev) ? prev : pickDefaultLine(lineGroups, lineNames),
+    );
   }, [lineNames, lineGroups]);
 
   useEffect(() => {
     if (lineFiles.length > 0) {
       setCurrent((prev) => {
         if (prev && lineFiles.some((f) => f.url === prev.url)) return prev;
-        const preferred =
-          lineFiles.find((f) => f.format === 'm3u8' || f.url.includes('.m3u8')) ??
-          lineFiles[0];
-        return preferred;
+        return lineFiles[0];
       });
       setError(false);
       setEpPage(1);
@@ -185,23 +205,54 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
 
     const playUrl = proxyStreamUrl(current.url);
 
+    let cancelled = false;
+    const tryPlay = () => {
+      void video.play().catch(() => {});
+    };
+
     if (isM3u8 && Hls.isSupported()) {
       const hls = new Hls(HLS_PLAYER_CONFIG);
       hlsRef.current = hls;
-      hls.loadSource(playUrl);
       hls.attachMedia(video);
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) setError(true);
+      let playStarted = false;
+      const tryPlayOnce = () => {
+        if (cancelled || playStarted) return;
+        playStarted = true;
+        tryPlay();
+      };
+      hls.on(Hls.Events.FRAG_BUFFERED, (_e, data) => {
+        if (data.frag.type === 'main') tryPlayOnce();
       });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        window.setTimeout(() => {
+          if (!cancelled) tryPlayOnce();
+        }, 3000);
+      });
+      hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (!data.fatal) return;
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            hls.startLoad();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            hls.recoverMediaError();
+            break;
+          default:
+            setError(true);
+            break;
+        }
+      });
+      hls.loadSource(playUrl);
     } else if (isM3u8 && video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = playUrl;
+      video.addEventListener('canplay', tryPlay, { once: true });
     } else {
       video.src = playUrl;
+      video.addEventListener('canplay', tryPlay, { once: true });
     }
 
-    void video.play().catch(() => {});
-
     return () => {
+      cancelled = true;
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -503,7 +554,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
                 autoPlay
                 playsInline
                 poster={poster}
-                preload="metadata"
+                preload="auto"
                 onMouseMove={revealControls}
                 onError={() => setError(true)}
                 onEnded={onVideoEnded}
