@@ -13,6 +13,39 @@ import type {
 
 const API_BASE = '/api';
 
+/** 短 TTL 去重，避免切换站点时 Home / CategoryBar 重复打同一接口 */
+const clientCache = new Map<string, { expireAt: number; value: Promise<unknown> }>();
+
+function cachedGet<T>(key: string, ttlMs: number, factory: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const hit = clientCache.get(key);
+  if (hit && hit.expireAt > now) return hit.value as Promise<T>;
+  const value = factory();
+  clientCache.set(key, { expireAt: now + ttlMs, value });
+  value.catch(() => {
+    const cur = clientCache.get(key);
+    if (cur?.value === value) clientCache.delete(key);
+  });
+  if (clientCache.size > 80) {
+    for (const [k, entry] of clientCache) {
+      if (entry.expireAt <= now) clientCache.delete(k);
+    }
+  }
+  return value;
+}
+
+/** 清空前端短 TTL 请求缓存 */
+export function clearClientCache(): void {
+  clientCache.clear();
+}
+
+/** 清空服务端 API 内存缓存并重新拉取 config */
+export function refreshServerCache(): Promise<{ ok: boolean; cleared: number }> {
+  return request<{ ok: boolean; cleared: number }>(`${API_BASE}/cache/refresh`, {
+    method: 'POST',
+  });
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
@@ -28,7 +61,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 /** 获取可用资源站 */
 export function fetchSources(): Promise<SourcesResponse> {
-  return request<SourcesResponse>(`${API_BASE}/movies/sources`);
+  return cachedGet('sources', 60_000, () =>
+    request<SourcesResponse>(`${API_BASE}/movies/sources`),
+  );
 }
 
 /** VOD 站点列表（含 api 地址，用于管理页） */
@@ -55,8 +90,10 @@ export function deleteVodSite(key: string): Promise<VodSitesResponse> {
 
 /** 获取 VOD 分类标签 */
 export function fetchCategories(source: string): Promise<CategoriesResponse> {
-  return request<CategoriesResponse>(
-    `${API_BASE}/movies/categories?source=${encodeURIComponent(source)}`,
+  return cachedGet(`categories:${source}`, 120_000, () =>
+    request<CategoriesResponse>(
+      `${API_BASE}/movies/categories?source=${encodeURIComponent(source)}`,
+    ),
   );
 }
 

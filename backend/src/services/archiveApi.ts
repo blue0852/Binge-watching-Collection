@@ -2,6 +2,7 @@
 // 文档：https://archive.org/advancedsearch.php
 
 import fetch from 'node-fetch';
+import { apiCache } from './memoryCache.js';
 import type {
   ArchiveSearchResponse,
   ArchiveMetadataResponse,
@@ -43,22 +44,10 @@ export function formatArchiveError(err: Error): string {
   return msg;
 }
 
-/** 简单内存缓存（TTL 5 分钟），减少对 archive.org 的重复请求 */
-interface CacheEntry<T> {
-  value: T;
-  expireAt: number;
-}
-const cache = new Map<string, CacheEntry<unknown>>();
 const CACHE_TTL = 5 * 60 * 1000;
 
-async function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
-  const hit = cache.get(key);
-  if (hit && hit.expireAt > Date.now()) {
-    return hit.value as T;
-  }
-  const value = await factory();
-  cache.set(key, { value, expireAt: Date.now() + CACHE_TTL });
-  return value;
+function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
+  return apiCache.cached(key, CACHE_TTL, factory);
 }
 
 /** 把 archive.org 的字符串/字符串数组字段统一成字符串 */

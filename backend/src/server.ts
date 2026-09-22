@@ -4,6 +4,7 @@ import express from 'express';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
+import { cacheRouter } from './routes/cache.js';
 import { moviesRouter } from './routes/movies.js';
 import { imagesRouter } from './routes/images.js';
 import { streamRouter } from './routes/stream.js';
@@ -35,6 +36,7 @@ export function createApp() {
 
   app.use('/api/img', imagesRouter);
   app.use('/api/stream', streamRouter);
+  app.use('/api/cache', cacheRouter);
   app.use('/api/movies', moviesRouter);
   app.get('/api/health', (_req, res) => res.json({ ok: true, time: Date.now() }));
 

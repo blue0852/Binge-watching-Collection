@@ -1,6 +1,6 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, type FormEvent } from 'react';
-import { fetchSources } from '../api/client.js';
+import { clearClientCache, fetchSources, refreshServerCache } from '../api/client.js';
 import HistoryPopover from './HistoryPopover.js';
 import type { SourceInfo } from '../types.js';
 
@@ -17,6 +17,7 @@ export default function Header() {
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [source, setSource] = useState('dyttzy');
   const [searchScope, setSearchScope] = useState<SearchScope>('global');
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     fetchSources()
@@ -24,14 +25,10 @@ export default function Header() {
         setSources(res.sources);
         const params = new URLSearchParams(location.search);
         const urlSource = params.get('source');
-        if (urlSource) {
-          setSource(urlSource);
-        } else {
-          setSource(res.defaultSource);
-        }
+        setSource(urlSource || res.defaultSource);
       })
       .catch(() => {});
-  }, [location.search]);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -90,6 +87,18 @@ export default function Header() {
     navigate(buildUrl(trimmed, source, false, next));
   }
 
+  async function onRefreshCache() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await refreshServerCache();
+      clearClientCache();
+      window.location.reload();
+    } catch {
+      setRefreshing(false);
+    }
+  }
+
   function onSourceChange(next: string) {
     setSource(next);
     const params = new URLSearchParams(location.search);
@@ -115,6 +124,19 @@ export default function Header() {
           <Link to="/sites" className="header-nav-link">
             站点管理
           </Link>
+          <button
+            type="button"
+            className="header-refresh-btn"
+            onClick={() => void onRefreshCache()}
+            disabled={refreshing}
+            title="刷新缓存并重新加载"
+            aria-label="刷新缓存并重新加载"
+          >
+            <span className={`header-refresh-icon${refreshing ? ' spinning' : ''}`} aria-hidden="true">
+              ↻
+            </span>
+            {refreshing ? '刷新中…' : '刷新'}
+          </button>
           {sources.length > 0 && (
             <select
               className="source-select"

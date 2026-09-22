@@ -158,6 +158,46 @@ img {
   text-decoration: none;
 }
 
+.header-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.header-refresh-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(229, 9, 20, 0.08);
+}
+.header-refresh-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.header-refresh-icon {
+  display: inline-block;
+  font-size: 16px;
+  line-height: 1;
+}
+.header-refresh-icon.spinning {
+  animation: header-refresh-spin 0.8s linear infinite;
+}
+@keyframes header-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .header-controls {
   display: flex;
   align-items: center;
