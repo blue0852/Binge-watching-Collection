@@ -56,6 +56,11 @@ export interface SourcesResponse {
   defaultSource: string;
 }
 
+export interface SourceLatencyResponse {
+  latencies: Record<string, number | null>;
+  measuredAt: number;
+}
+
 export interface VodCategory {
   typeId: number;
   typePid: number;

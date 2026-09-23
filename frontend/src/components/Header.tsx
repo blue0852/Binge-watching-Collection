@@ -1,7 +1,8 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, type FormEvent } from 'react';
-import { clearClientCache, fetchSources, refreshServerCache } from '../api/client.js';
+import { clearClientCache, fetchSourceLatencies, fetchSources, refreshServerCache } from '../api/client.js';
 import HistoryPopover from './HistoryPopover.js';
+import SourceSelect from './SourceSelect.js';
 import type { SourceInfo } from '../types.js';
 
 export type SearchScope = 'global' | 'site';
@@ -18,6 +19,8 @@ export default function Header() {
   const [source, setSource] = useState('dyttzy');
   const [searchScope, setSearchScope] = useState<SearchScope>('global');
   const [refreshing, setRefreshing] = useState(false);
+  const [latencies, setLatencies] = useState<Record<string, number | null>>({});
+  const [latencyLoading, setLatencyLoading] = useState(false);
 
   useEffect(() => {
     fetchSources()
@@ -29,6 +32,25 @@ export default function Header() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (sources.length === 0) return;
+    let cancelled = false;
+    setLatencyLoading(true);
+    fetchSourceLatencies()
+      .then((res) => {
+        if (!cancelled) setLatencies(res.latencies);
+      })
+      .catch(() => {
+        if (!cancelled) setLatencies({});
+      })
+      .finally(() => {
+        if (!cancelled) setLatencyLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sources.length]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -138,18 +160,13 @@ export default function Header() {
             {refreshing ? '刷新中…' : '刷新'}
           </button>
           {sources.length > 0 && (
-            <select
-              className="source-select"
+            <SourceSelect
+              sources={sources}
               value={source}
-              onChange={(e) => onSourceChange(e.target.value)}
-              aria-label="选择资源站"
-            >
-              {sources.map((s) => (
-                <option key={s.key} value={s.key}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              latencies={latencies}
+              latencyLoading={latencyLoading}
+              onChange={onSourceChange}
+            />
           )}
           <select
             className="search-scope-select"

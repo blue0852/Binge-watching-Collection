@@ -1,6 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { addVodSite, deleteVodSite, fetchVodSites } from '../api/client.js';
+import { addVodSite, deleteVodSite, fetchSourceLatencies, fetchVodSites } from '../api/client.js';
+import { formatSourceLatency, sourceLatencyClass } from '../utils/sourceLatency.js';
 import type { VodSiteEntry } from '../types.js';
 
 const emptyForm = (): VodSiteEntry => ({
@@ -19,6 +20,8 @@ export default function SitesPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [configPath, setConfigPath] = useState<string | null>(null);
+  const [latencies, setLatencies] = useState<Record<string, number | null>>({});
+  const [latencyLoading, setLatencyLoading] = useState(false);
 
   function loadSites() {
     setLoading(true);
@@ -35,6 +38,25 @@ export default function SitesPage() {
   useEffect(() => {
     loadSites();
   }, []);
+
+  useEffect(() => {
+    if (loading || sites.length === 0) return;
+    let cancelled = false;
+    setLatencyLoading(true);
+    fetchSourceLatencies()
+      .then((res) => {
+        if (!cancelled) setLatencies(res.latencies);
+      })
+      .catch(() => {
+        if (!cancelled) setLatencies({});
+      })
+      .finally(() => {
+        if (!cancelled) setLatencyLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, sites.length]);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -158,7 +180,17 @@ export default function SitesPage() {
             {sites.map((site) => (
               <li key={site.key} className="sites-list-item">
                 <div className="sites-list-main">
-                  <strong>{site.name}</strong>
+                  <strong>
+                    {site.name}
+                    <span
+                      className={`source-latency ${sourceLatencyClass(latencies[site.key], latencyLoading && !(site.key in latencies))}`}
+                      title="连接延迟（列表接口探测）"
+                    >
+                      {latencyLoading && !(site.key in latencies)
+                        ? ' · …'
+                        : ` · ${formatSourceLatency(latencies[site.key])}`}
+                    </span>
+                  </strong>
                   <span className="sites-list-key">{site.key}</span>
                   <a href={site.api} target="_blank" rel="noopener noreferrer" className="sites-list-api">
                     {site.api}

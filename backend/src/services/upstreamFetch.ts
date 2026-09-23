@@ -8,6 +8,7 @@ import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import fetch from 'node-fetch';
 import { isCacheableSegmentUrl, putCachedSegment } from './streamSegmentCache.js';
+import { formatUpstreamErrorMessage, shouldSkipWindowsFallback } from './upstreamError.js';
 
 const execFileAsync = promisify(execFile);
 const AGENT_OPTS = { keepAlive: true, maxSockets: 64, keepAliveMsecs: 30_000 };
@@ -17,6 +18,8 @@ const httpsAgent = new https.Agent({ ...AGENT_OPTS, rejectUnauthorized: false })
 function agentFor(url: string): http.Agent | https.Agent {
   return url.startsWith('https://') ? httpsAgent : httpAgent;
 }
+
+export { agentFor };
 
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -35,8 +38,13 @@ function originFromUrl(url: string): string {
 }
 
 function looksLikeHtml(text: string): boolean {
-  const t = text.trimStart().slice(0, 32).toLowerCase();
-  return t.startsWith('<!doctype') || t.startsWith('<html') || t.startsWith('<');
+  const t = text.trimStart().slice(0, 64).toLowerCase();
+  if (t.startsWith('<!doctype') || t.startsWith('<html') || t.startsWith('<')) return true;
+  return text.includes('Just a moment') || text.includes('cf-chl');
+}
+
+function wrapUpstreamError(err: Error): Error {
+  return new Error(formatUpstreamErrorMessage(err));
 }
 
 function psQuote(raw: string): string {
@@ -56,12 +64,16 @@ async function winFetchText(url: string, headers: Record<string, string>): Promi
     '$r.Content',
   ].join('\n');
 
-  const { stdout } = await execFileAsync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    { maxBuffer: 20 * 1024 * 1024, timeout: 20000, encoding: 'utf8' },
-  );
-  return stdout;
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { maxBuffer: 20 * 1024 * 1024, timeout: 20000, encoding: 'utf8' },
+    );
+    return stdout;
+  } catch {
+    throw new Error('Windows 回退请求失败');
+  }
 }
 
 async function winFetchBuffer(url: string, headers: Record<string, string>): Promise<Buffer> {
@@ -132,8 +144,8 @@ export async function fetchUpstreamText(
     nodeError = e as Error;
   }
 
-  if (process.platform !== 'win32') {
-    throw nodeError ?? new Error('上游请求失败');
+  if (process.platform !== 'win32' || (nodeError && shouldSkipWindowsFallback(nodeError))) {
+    throw wrapUpstreamError(nodeError ?? new Error('上游请求失败'));
   }
 
   try {
@@ -143,11 +155,10 @@ export async function fetchUpstreamText(
     }
     return text;
   } catch (e) {
-    const winMsg = (e as Error).message;
-    if (nodeError) {
-      throw new Error(`${nodeError.message}；Windows 回退失败: ${winMsg}`);
-    }
-    throw e;
+    const combined = new Error(
+      nodeError ? `${nodeError.message}；${(e as Error).message}` : (e as Error).message,
+    );
+    throw wrapUpstreamError(combined);
   }
 }
 
@@ -170,19 +181,18 @@ export async function fetchUpstreamBuffer(
     nodeError = e as Error;
   }
 
-  if (process.platform !== 'win32') {
-    throw nodeError ?? new Error('上游请求失败');
+  if (process.platform !== 'win32' || (nodeError && shouldSkipWindowsFallback(nodeError))) {
+    throw wrapUpstreamError(nodeError ?? new Error('上游请求失败'));
   }
 
   try {
     const buffer = await winFetchBuffer(url, headers);
     return { buffer, contentType: guessContentType(url) };
   } catch (e) {
-    const winMsg = (e as Error).message;
-    if (nodeError) {
-      throw new Error(`${nodeError.message}；Windows 回退失败: ${winMsg}`);
-    }
-    throw e;
+    const combined = new Error(
+      nodeError ? `${nodeError.message}；${(e as Error).message}` : (e as Error).message,
+    );
+    throw wrapUpstreamError(combined);
   }
 }
 
