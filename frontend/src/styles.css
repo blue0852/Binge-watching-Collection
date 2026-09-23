@@ -875,21 +875,6 @@ img {
 .player-skip-btn + .player-skip-btn {
   top: 52px;
 }
-.player-ep-badge {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  max-width: calc(100% - 120px);
-  padding: 6px 12px;
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 999px;
-  color: #fff;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  backdrop-filter: blur(6px);
-}
 .player-empty,
 .player-error {
   display: flex;

@@ -598,14 +598,6 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
                   </button>
                 )}
 
-                {current && (
-                  <div className="player-ep-badge">
-                    {lineFiles.length > 1
-                      ? `${episodeLabel(current)}（${currentIndex + 1}/${lineFiles.length}）`
-                      : episodeLabel(current)}
-                  </div>
-                )}
-
                 <div
                   className={`player-center-bar${controlsVisible ? ' visible' : ''}`}
                   onClick={(e) => e.stopPropagation()}
