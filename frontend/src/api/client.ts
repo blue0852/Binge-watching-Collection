@@ -6,6 +6,7 @@ import type {
   MovieDetail,
   MovieListItem,
   PaginatedResult,
+  SourceLatencyResponse,
   SourcesResponse,
   VodSiteEntry,
   VodSitesResponse,
@@ -53,8 +54,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       error?: string;
       detail?: string;
     };
-    const msg = [body.error, body.detail].filter(Boolean).join('：');
-    throw new Error(msg || `请求失败: ${res.status}`);
+    const err = body.error?.trim();
+    const detail = body.detail?.trim();
+    let msg: string;
+    if (err && detail) {
+      msg = detail.startsWith(err) ? detail : `${err}：${detail}`;
+    } else {
+      msg = detail || err || `请求失败: ${res.status}`;
+    }
+    throw new Error(msg);
   }
   return res.json() as Promise<T>;
 }
@@ -63,6 +71,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export function fetchSources(): Promise<SourcesResponse> {
   return cachedGet('sources', 60_000, () =>
     request<SourcesResponse>(`${API_BASE}/movies/sources`),
+  );
+}
+
+/** 各资源站连接延迟（后端约 60s 缓存） */
+export function fetchSourceLatencies(): Promise<SourceLatencyResponse> {
+  return cachedGet('sources-latency', 55_000, () =>
+    request<SourceLatencyResponse>(`${API_BASE}/movies/sources/latency`),
   );
 }
 

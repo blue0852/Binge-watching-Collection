@@ -17,6 +17,8 @@ import {
   getVodCategories,
   parseVodId,
 } from '../services/vodApi.js';
+import { measureAllSourceLatencies } from '../services/sourceLatency.js';
+import { formatUpstreamErrorMessage } from '../services/upstreamError.js';
 import type { GlobalSearchResult, MovieListItem, SourceInfo } from '../types.js';
 
 export const moviesRouter = Router();
@@ -35,7 +37,7 @@ function isArchiveSource(source: string): boolean {
 
 function upstreamErrorDetail(source: string, err: Error): string {
   if (isArchiveSource(source)) return formatArchiveError(err);
-  return err.message;
+  return formatUpstreamErrorMessage(err);
 }
 
 /**
@@ -53,6 +55,19 @@ moviesRouter.get('/sources', (_req, res) => {
     ...vodSources,
   ];
   res.json({ sources, defaultSource: DEFAULT_VOD_SOURCE });
+});
+
+/**
+ * GET /api/movies/sources/latency
+ * 各资源站连接延迟（毫秒），失败为 null
+ */
+moviesRouter.get('/sources/latency', async (_req, res) => {
+  try {
+    const result = await measureAllSourceLatencies();
+    res.json(result);
+  } catch (e) {
+    res.status(502).json({ error: '延迟探测失败', detail: (e as Error).message });
+  }
 });
 
 /**
@@ -112,7 +127,11 @@ moviesRouter.get('/categories', async (req, res) => {
     const categories = await getVodCategories(source);
     res.json({ categories });
   } catch (e) {
-    res.status(502).json({ error: '获取分类失败', detail: (e as Error).message });
+    const source = resolveSource(req.query.source);
+    res.status(502).json({
+      error: '获取分类失败',
+      detail: upstreamErrorDetail(source, e as Error),
+    });
   }
 });
 
@@ -216,7 +235,7 @@ moviesRouter.get('/search/global', async (req, res) => {
   } catch (e) {
     res.status(502).json({
       error: '全站搜索失败',
-      detail: (e as Error).message,
+      detail: formatUpstreamErrorMessage(e as Error),
     });
   }
 });
@@ -275,6 +294,11 @@ moviesRouter.get('/:id', async (req, res) => {
     }
     res.json(detail);
   } catch (e) {
-    res.status(502).json({ error: '上游请求失败', detail: (e as Error).message });
+    const parsed = parseVodId(req.params.id);
+    const source = parsed?.source ?? ARCHIVE_SOURCE;
+    res.status(502).json({
+      error: '上游请求失败',
+      detail: upstreamErrorDetail(source, e as Error),
+    });
   }
 });

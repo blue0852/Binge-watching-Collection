@@ -1,6 +1,6 @@
 {
   "name": "public-domain-cinema",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "private": true,
   "description": "聚合 Internet Archive 公有领域影视资源的合法播放站",
   "main": "desktop/main.mjs",

@@ -217,19 +217,113 @@ img {
   flex-shrink: 0;
 }
 
-.source-select {
+.source-latency {
+  font-weight: 600;
+  font-size: 12px;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.latency-good {
+  color: #22c55e;
+}
+.latency-mid {
+  color: #eab308;
+}
+.latency-bad {
+  color: #ef4444;
+}
+.latency-pending {
+  color: var(--text-dim);
+}
+
+.source-picker {
+  position: relative;
+  flex-shrink: 0;
+  max-width: 280px;
+}
+.source-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  max-width: 280px;
   padding: 10px 12px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
   font-size: 13px;
-  max-width: 180px;
   cursor: pointer;
-  outline: none;
+  text-align: left;
 }
-.source-select:focus {
+.source-picker-trigger:hover,
+.source-picker-trigger[aria-expanded='true'] {
   border-color: var(--accent);
+}
+.source-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-picker-chevron {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: 2px;
+}
+.source-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 200;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 24px));
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.source-picker-menu::-webkit-scrollbar {
+  display: none;
+}
+.source-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: max-content;
+  padding: 8px 10px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.source-picker-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.source-picker-item.active {
+  background: rgba(229, 9, 20, 0.15);
+}
+.source-picker-item-name {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+.source-picker-item .source-latency {
+  flex-shrink: 0;
 }
 
 /* ===== Hero ===== */

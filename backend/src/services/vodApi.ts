@@ -120,15 +120,20 @@ async function enrichWithThumbnails(
   const url = buildUrl(site.api, { ac: 'detail', ids });
   const cacheKey = `vod:thumbs:${source}:${ids}`;
 
-  const picMap = await cached(cacheKey, async () => {
-    const data = await fetchVodApi(url);
-    const map = new Map<string, string>();
-    for (const vod of data.list ?? []) {
-      const pic = normalizePicUrl(vod.vod_pic, site);
-      if (pic) map.set(String(vod.vod_id), pic);
-    }
-    return map;
-  });
+  let picMap: Map<string, string>;
+  try {
+    picMap = await cached(cacheKey, async () => {
+      const data = await fetchVodApi(url);
+      const map = new Map<string, string>();
+      for (const vod of data.list ?? []) {
+        const pic = normalizePicUrl(vod.vod_pic, site);
+        if (pic) map.set(String(vod.vod_id), pic);
+      }
+      return map;
+    });
+  } catch {
+    return items;
+  }
 
   return items.map((item) => {
     if (item.thumbnail) return item;
