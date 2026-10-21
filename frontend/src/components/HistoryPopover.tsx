@@ -5,6 +5,7 @@ import {
   getPlayHistory,
   historyDetailPath,
   historyProgressPercent,
+  historyProgressText,
   HISTORY_CHANGED,
   type PlayHistoryEntry,
 } from '../utils/playHistory.js';
@@ -78,6 +79,7 @@ export default function HistoryPopover() {
             <ul className="history-popover-list">
               {items.map((entry) => {
                 const pct = historyProgressPercent(entry);
+                const progressText = historyProgressText(entry);
                 const thumb = proxyImageUrl(entry.thumbnail) || entry.thumbnail;
                 return (
                   <li key={entry.id}>
@@ -105,6 +107,11 @@ export default function HistoryPopover() {
                             .filter(Boolean)
                             .join(' · ')}
                         </span>
+                        {progressText && (
+                          <span className="history-popover-sub history-popover-progress">
+                            {progressText}
+                          </span>
+                        )}
                       </div>
                     </Link>
                   </li>

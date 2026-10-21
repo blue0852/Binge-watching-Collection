@@ -10,6 +10,8 @@ export interface PlayHistoryEntry {
   year?: string;
   episodeLabel?: string;
   playUrl?: string;
+  /** 线路名（与 PlayableFile.name 中「 · 」前的部分一致） */
+  lineName?: string;
   /** 秒 */
   position?: number;
   duration?: number;
@@ -63,6 +65,7 @@ export function upsertPlayHistory(partial: Omit<PlayHistoryEntry, 'updatedAt'> &
     year: partial.year ?? prev?.year,
     episodeLabel: partial.episodeLabel ?? prev?.episodeLabel,
     playUrl: partial.playUrl ?? prev?.playUrl,
+    lineName: partial.lineName ?? prev?.lineName,
     position: partial.position ?? prev?.position,
     duration: partial.duration ?? prev?.duration,
     updatedAt: now,
@@ -100,6 +103,30 @@ export function historyProgressPercent(entry: PlayHistoryEntry): number | null {
   const { position, duration } = entry;
   if (position == null || duration == null || duration <= 0) return null;
   return Math.min(100, Math.round((position / duration) * 100));
+}
+
+/** 秒 -> 12:34 / 1:02:03 */
+export function formatClock(seconds?: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '';
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return h > 0 ? `${h}:${mm}:${String(s).padStart(2, '0')}` : `${mm}:${String(s).padStart(2, '0')}`;
+}
+
+/** 「看到 12:34 / 45:10 · 28%」，用于历史列表 */
+export function historyProgressText(entry: PlayHistoryEntry): string {
+  const pct = historyProgressPercent(entry);
+  if (pct != null && pct >= 98) return '已看完';
+
+  const at = formatClock(entry.position);
+  if (!at || entry.position == null || entry.position < 1) return '';
+
+  const total = formatClock(entry.duration);
+  const where = total ? `${at} / ${total}` : at;
+  return pct != null ? `看到 ${where} · ${pct}%` : `看到 ${where}`;
 }
 
 export function historyDetailPath(entry: PlayHistoryEntry): string {

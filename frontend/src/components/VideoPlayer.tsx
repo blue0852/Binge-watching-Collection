@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Hls from 'hls.js';
 import type { HlsConfig } from 'hls.js';
 import Pagination from './Pagination.js';
-import { getHistoryEntry, upsertPlayHistory } from '../utils/playHistory.js';
+import { getHistoryEntry, upsertPlayHistory, type PlayHistoryEntry } from '../utils/playHistory.js';
 import { getPlayerSettings, savePlayerSettings } from '../utils/playerSettings.js';
 import { proxyStreamUrl } from '../utils/streamUrl.js';
 import type { PlayableFile } from '../types.js';
@@ -171,11 +171,56 @@ export default function VideoPlayer({
   compact = false,
   onEnterMini,
 }: Props) {
-  const [activeLine, setActiveLine] = useState('');
-  const [current, setCurrent] = useState<PlayableFile | null>(null);
+  // 线路分组先算好，才能把「上次看的线路 + 那一集」直接作为初始状态
+  const lineGroups = useMemo(() => {
+    const map = new Map<string, PlayableFile[]>();
+    for (const f of files) {
+      const key = lineKey(f);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(f);
+    }
+    return map;
+  }, [files]);
+
+  const lineNames = useMemo(() => [...lineGroups.keys()], [lineGroups]);
+
+  // 只在首次挂载时读一次历史：之后由播放本身写回，避免被旧记录反复拉回
+  const initialHistoryRef = useRef<PlayHistoryEntry | null | undefined>(undefined);
+  if (initialHistoryRef.current === undefined) {
+    initialHistoryRef.current = historyMeta ? (getHistoryEntry(historyMeta.id) ?? null) : null;
+  }
+
+  /** 由历史记录推导出「上次的线路 + 那一集的位置」 */
+  const initialRestore = useMemo(() => {
+    const empty = { line: '', index: -1 };
+    const hit = initialHistoryRef.current;
+    if (!hit) return empty;
+    // 以实际文件为准反查线路：老记录只有 playUrl 也能定位
+    const owner = hit.playUrl ? files.find((f) => f.url === hit.playUrl) : undefined;
+    const line = owner
+      ? lineKey(owner)
+      : hit.lineName && lineGroups.has(hit.lineName)
+        ? hit.lineName
+        : '';
+    if (!line) return empty;
+    const list = lineGroups.get(line) ?? [];
+    return { line, index: owner ? list.findIndex((f) => f.url === owner.url) : -1 };
+    // 仅在挂载时计算一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const initialLine = initialRestore.line || pickDefaultLine(lineGroups, lineNames);
+  const [activeLine, setActiveLine] = useState(initialLine);
+  const [current, setCurrent] = useState<PlayableFile | null>(() => {
+    const list = lineGroups.get(initialLine) ?? [];
+    if (initialRestore.index >= 0) return list[initialRestore.index] ?? null;
+    return list[0] ?? null;
+  });
   const [error, setError] = useState(false);
   const [continuousPlay, setContinuousPlay] = useState(true);
-  const [epPage, setEpPage] = useState(1);
+  const [epPage, setEpPage] = useState(() =>
+    initialRestore.index >= 0 ? Math.floor(initialRestore.index / EPISODES_PER_PAGE) + 1 : 1,
+  );
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -191,24 +236,14 @@ export default function VideoPlayer({
   const hlsRef = useRef<Hls | null>(null);
   const restoredUrlRef = useRef<string | null>(null);
   const lastHistorySaveRef = useRef(0);
+  /** 播放进度快照：video 元素被卸载后仍能落盘 */
+  const lastProgressRef = useRef<{ url: string; position: number; duration?: number } | null>(null);
   /** timeupdate 每 250ms 触发一次，只在整秒变化时更新 state，避免整棵选集列表重渲染 */
   const lastPlaybackSecondRef = useRef(-1);
   const lastDurationSecondRef = useRef(-1);
   const hideControlsTimerRef = useRef<number | null>(null);
   const outroSkippedRef = useRef(false);
   const [introSkipped, setIntroSkipped] = useState(false);
-
-  const lineGroups = useMemo(() => {
-    const map = new Map<string, PlayableFile[]>();
-    for (const f of files) {
-      const key = lineKey(f);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(f);
-    }
-    return map;
-  }, [files]);
-
-  const lineNames = useMemo(() => [...lineGroups.keys()], [lineGroups]);
 
   const lineFiles = useMemo(() => {
     const key = activeLine || lineNames[0] || '';
@@ -223,15 +258,15 @@ export default function VideoPlayer({
   }, [lineNames, lineGroups]);
 
   useEffect(() => {
-    if (lineFiles.length > 0) {
-      setCurrent((prev) => {
-        if (prev && lineFiles.some((f) => f.url === prev.url)) return prev;
-        return lineFiles[0];
-      });
-      setError(false);
+    if (lineFiles.length === 0) return;
+    // 切换线路后 current 可能不在新线路里，此时回到第一集
+    const kept = Boolean(current && lineFiles.some((f) => f.url === current.url));
+    if (!kept) {
+      setCurrent(lineFiles[0]);
       setEpPage(1);
     }
-  }, [lineFiles]);
+    setError(false);
+  }, [lineFiles, current]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -308,6 +343,8 @@ export default function VideoPlayer({
     restoredUrlRef.current = null;
     lastPlaybackSecondRef.current = -1;
     lastDurationSecondRef.current = -1;
+    lastHistorySaveRef.current = 0;
+    lastProgressRef.current = null;
     setIntroSkipped(false);
     setPlaybackTime(0);
     setDuration(0);
@@ -329,7 +366,19 @@ export default function VideoPlayer({
     (force = false) => {
       if (!historyMeta || !current || error) return;
       const video = videoRef.current;
-      if (!video) return;
+      const snap = lastProgressRef.current;
+      // 视频元素已卸载（关小窗/切页）时退回最后一次进度快照
+      const useSnap = !video && snap?.url === current.url;
+      const position = video ? video.currentTime : useSnap ? snap!.position : null;
+      const duration = video
+        ? Number.isFinite(video.duration)
+          ? video.duration
+          : undefined
+        : useSnap
+          ? snap!.duration
+          : undefined;
+      if (position == null) return;
+
       const now = Date.now();
       if (!force && now - lastHistorySaveRef.current < 4000) return;
       lastHistorySaveRef.current = now;
@@ -342,25 +391,55 @@ export default function VideoPlayer({
         year: historyMeta.year,
         episodeLabel: episodeLabel(current),
         playUrl: current.url,
-        position: video.currentTime,
-        duration: Number.isFinite(video.duration) ? video.duration : undefined,
+        lineName: lineKey(current),
+        position,
+        duration,
       });
     },
     [historyMeta, current, error, title, sourceLabel],
   );
 
+  /** 元数据就绪后把进度定位到上次的位置；只对「上次那一集」生效 */
   function restoreHistoryPosition() {
-    if (!historyMeta || !current || restoredUrlRef.current === current.url) return;
-    restoredUrlRef.current = current.url;
-    const hit = getHistoryEntry(historyMeta.id);
-    if (!hit || hit.playUrl !== current.url || hit.position == null || hit.position < 3) return;
+    const hit = initialHistoryRef.current;
     const video = videoRef.current;
-    if (!video) return;
+    if (!hit || !current || !video) return;
+    if (restoredUrlRef.current === current.url) return;
+    if (hit.position == null || hit.position < 3) return;
+    // 换线路 / 换集后地址会变，此时不跳转，只记录已经处理过
+    if (hit.playUrl && hit.playUrl !== current.url) return;
+
     const dur = video.duration;
-    if (Number.isFinite(dur) && hit.position >= dur - 5) return;
-    video.currentTime = hit.position;
+    if (Number.isFinite(dur) && dur > 0 && hit.position >= dur - 5) return;
+
+    restoredUrlRef.current = current.url;
+    try {
+      video.currentTime = hit.position;
+      setPlaybackTime(hit.position);
+    } catch {
+      /* 部分分片流在元数据前不允许 seek，忽略即可 */
+    }
     if (hit.position >= playerSettings.introSkipSeconds) setIntroSkipped(true);
   }
+
+  // 关闭页面 / 切后台 / 播放器卸载时立即落盘，避免最后几秒进度丢失
+  const persistRef = useRef(persistHistory);
+  persistRef.current = persistHistory;
+  useEffect(() => {
+    const flush = () => persistRef.current(true);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flush();
+    };
+  }, []);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -647,6 +726,11 @@ export default function VideoPlayer({
                   const v = e.currentTarget;
                   const t = v.currentTime;
                   const dur = Number.isFinite(v.duration) ? v.duration : duration;
+                  lastProgressRef.current = {
+                    url: current?.url ?? '',
+                    position: t,
+                    duration: Number.isFinite(v.duration) ? v.duration : undefined,
+                  };
                   const sec = Math.floor(t);
                   if (sec !== lastPlaybackSecondRef.current) {
                     lastPlaybackSecondRef.current = sec;

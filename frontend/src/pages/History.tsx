@@ -6,6 +6,7 @@ import {
   getPlayHistory,
   historyDetailPath,
   historyProgressPercent,
+  historyProgressText,
   HISTORY_CHANGED,
   removePlayHistory,
   type PlayHistoryEntry,
@@ -67,6 +68,7 @@ export default function HistoryPage() {
 
 function HistoryRow({ entry, onRemove }: { entry: PlayHistoryEntry; onRemove: () => void }) {
   const pct = historyProgressPercent(entry);
+  const progressText = historyProgressText(entry);
   const thumb = proxyImageUrl(entry.thumbnail) || entry.thumbnail;
 
   return (
@@ -92,9 +94,7 @@ function HistoryRow({ entry, onRemove }: { entry: PlayHistoryEntry; onRemove: ()
             {entry.year && <span>{entry.year}</span>}
             <span>{formatHistoryTime(entry.updatedAt)}</span>
           </p>
-          {pct != null && pct > 0 && pct < 98 && (
-            <p className="hint">续播 · 已看 {pct}%</p>
-          )}
+          {progressText && <p className="hint history-item-progress">{progressText}</p>}
         </div>
       </Link>
       <button type="button" className="btn btn-sm history-remove" onClick={onRemove} aria-label="移除">
