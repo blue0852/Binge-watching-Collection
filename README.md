@@ -8,6 +8,7 @@
 - **分类标签**：按资源站返回的 `class` 分类筛选（无 `type_pid` 的站点以扁平标签展示）
 - **搜索与分页**：关键词搜索、加载更多
 - **详情播放**：选集 / 多线路；m3u8 使用 [hls.js](https://github.com/video-dev/hls.js)
+- **小窗播放**：播放中切到其他页面自动收进右下角悬浮小窗（可拖动、随时还原），也可点播放器工具栏的「小窗」手动切换；支持浏览器画中画（浮在其他窗口之上）
 - **封面代理**：部分图床浏览器直连，其余经 `/api/img` 代理
 
 ## 技术栈
@@ -69,8 +70,8 @@ npm run pack:portable
 
 | 文件 | 说明 |
 |------|------|
-| `Public Domain Cinema-1.0.5-portable.exe` | 绿色便携版，双击即用 |
-| `Public Domain Cinema-1.0.5-setup.exe` | 安装版 |
+| `Public Domain Cinema-1.0.6-portable.exe` | 绿色便携版，双击即用 |
+| `Public Domain Cinema-1.0.6-setup.exe` | 安装版 |
 
 仅生成未压缩目录（调试打包用）：`npm run pack:dir`
 

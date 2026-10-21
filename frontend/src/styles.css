@@ -935,6 +935,112 @@ img {
   border-top: 1px solid var(--border);
 }
 
+/* ===== 悬浮播放器 / 小窗 ===== */
+.player-float {
+  position: fixed;
+  z-index: 90;
+}
+.player-float.is-docked {
+  background: #000;
+  border-radius: var(--radius);
+}
+.player-float.is-mini {
+  z-index: 120;
+  width: 360px;
+  max-width: calc(100vw - 40px);
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+.player-float .player {
+  margin-bottom: 0;
+}
+.player-float.is-mini .player {
+  border-radius: 0;
+}
+.player-float-loading {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+.player-float-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 10px;
+  background: #15171c;
+  color: #fff;
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.player-float-bar:active {
+  cursor: grabbing;
+}
+.player-float-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.player-float-bar button {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.player-float-bar button:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+/* 小窗空间有限：隐藏自定义中心控件，用原生控件就够了 */
+.player-float.is-mini .player-center-bar {
+  display: none;
+}
+.player-icon-btn.is-active {
+  color: var(--accent);
+}
+
+/* 详情页停靠占位：视频本身是 fixed 覆盖在这块区域上的 */
+.player-slot {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 24px;
+  border-radius: var(--radius);
+  background: #000;
+}
+.player-slot.is-mini {
+  aspect-ratio: auto;
+  height: auto;
+  background: transparent;
+  margin-bottom: 16px;
+}
+.player-slot-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.player-slot-hint .btn {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
 /* ===== 详情信息 ===== */
 .detail-info {
   display: grid;

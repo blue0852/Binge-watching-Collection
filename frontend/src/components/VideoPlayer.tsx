@@ -86,6 +86,30 @@ function IconFullscreenExit() {
   );
 }
 
+function IconMiniWindow() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M19 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v-2H5V7h14v4h2V7a2 2 0 0 0-2-2z"
+      />
+      <rect x="12" y="12" width="9" height="7" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function IconPictureInPicture() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M19 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5v-2H5V7h14v3h2V7a2 2 0 0 0-2-2z"
+      />
+      <rect x="12" y="11" width="10" height="8" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
 function getFullscreenElement(): Element | null {
   const doc = document as Document & {
     webkitFullscreenElement?: Element | null;
@@ -112,6 +136,10 @@ interface Props {
   title: string;
   sourceLabel?: string;
   historyMeta?: PlayHistoryMeta;
+  /** 小窗模式：只保留画面与原生控件，隐藏选集/线路/设置 */
+  compact?: boolean;
+  /** 点击「小窗」按钮时由外部接管（收进右下角悬浮窗） */
+  onEnterMini?: () => void;
 }
 
 function lineKey(f: PlayableFile): string {
@@ -134,7 +162,15 @@ function pickDefaultLine(lineGroups: Map<string, PlayableFile[]>, names: string[
   return hlsLine ?? names[0] ?? '';
 }
 
-export default function VideoPlayer({ files, poster, title, sourceLabel, historyMeta }: Props) {
+export default function VideoPlayer({
+  files,
+  poster,
+  title,
+  sourceLabel,
+  historyMeta,
+  compact = false,
+  onEnterMini,
+}: Props) {
   const [activeLine, setActiveLine] = useState('');
   const [current, setCurrent] = useState<PlayableFile | null>(null);
   const [error, setError] = useState(false);
@@ -146,6 +182,10 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
   const [playerSettings, setPlayerSettings] = useState(getPlayerSettings);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pipActive, setPipActive] = useState(false);
+  const [pipSupported] = useState(
+    () => typeof document !== 'undefined' && Boolean(document.pictureInPictureEnabled),
+  );
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -418,6 +458,30 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
     };
   }, []);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onEnter = () => setPipActive(true);
+    const onLeave = () => setPipActive(false);
+    video.addEventListener('enterpictureinpicture', onEnter);
+    video.addEventListener('leavepictureinpicture', onLeave);
+    return () => {
+      video.removeEventListener('enterpictureinpicture', onEnter);
+      video.removeEventListener('leavepictureinpicture', onLeave);
+    };
+  }, [current]);
+
+  const togglePictureInPicture = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !document.pictureInPictureEnabled) return;
+    revealControls();
+    if (document.pictureInPictureElement) {
+      void document.exitPictureInPicture().catch(() => {});
+      return;
+    }
+    void video.requestPictureInPicture().catch(() => {});
+  }, [revealControls]);
+
   const toggleFullscreen = useCallback(() => {
     const container = playerContainerRef.current;
     if (!container) return;
@@ -532,7 +596,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
   const visibleEpisodes = lineFiles.slice(epStart, epStart + EPISODES_PER_PAGE);
 
   return (
-    <div className="player">
+    <div className={compact ? 'player player-compact' : 'player'}>
       <div className="player-video">
         {error ? (
           <div className="player-error">
@@ -651,6 +715,28 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
                   >
                     <IconNext />
                   </button>
+                  {onEnterMini && (
+                    <button
+                      type="button"
+                      className="player-icon-btn"
+                      onClick={onEnterMini}
+                      title="小窗播放（切页面也能继续看）"
+                      aria-label="小窗播放"
+                    >
+                      <IconMiniWindow />
+                    </button>
+                  )}
+                  {pipSupported && (
+                    <button
+                      type="button"
+                      className={`player-icon-btn${pipActive ? ' is-active' : ''}`}
+                      onClick={togglePictureInPicture}
+                      title={pipActive ? '退出画中画' : '画中画（浮在其他窗口之上）'}
+                      aria-label={pipActive ? '退出画中画' : '画中画'}
+                    >
+                      <IconPictureInPicture />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="player-icon-btn player-icon-btn-fs"
@@ -667,7 +753,8 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
         )}
       </div>
 
-      <div className="player-options">
+      {!compact && (
+        <div className="player-options">
         <label className="skip-setting">
           <span>片头跳过</span>
           <input
@@ -700,9 +787,10 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
           />
           连续播放（播完自动下一集）
         </label>
-      </div>
+        </div>
+      )}
 
-      {lineNames.length > 1 && (
+      {!compact && lineNames.length > 1 && (
         <div className="player-lines">
           <span className="sources-label">线路：</span>
           <div className="sources-list">
@@ -720,7 +808,7 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
         </div>
       )}
 
-      {lineFiles.length > 1 && (
+      {!compact && lineFiles.length > 1 && (
         <div className="player-sources">
           <span className="sources-label">选集：</span>
           <div className="sources-list">
@@ -746,9 +834,11 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
         </div>
       )}
 
-      <p className="player-credit">
-        正在播放「{title}」{sourceLabel ? ` · ${sourceLabel}` : ''}
-      </p>
+      {!compact && (
+        <p className="player-credit">
+          正在播放「{title}」{sourceLabel ? ` · ${sourceLabel}` : ''}
+        </p>
+      )}
     </div>
   );
 }
