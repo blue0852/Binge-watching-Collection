@@ -3,6 +3,7 @@
 
 import fetch from 'node-fetch';
 import { apiCache } from './memoryCache.js';
+import { mergeSignals, timeoutSignal } from './http.js';
 import type {
   ArchiveSearchResponse,
   ArchiveMetadataResponse,
@@ -14,25 +15,36 @@ import type {
 } from '../types.js';
 
 const ARCHIVE_BASE = 'https://archive.org';
-const ARCHIVE_TIMEOUT_MS = 30000;
-const ARCHIVE_RETRIES = 2;
+/** 国内直连 archive.org 基本不可达，单次等待不宜过长 */
+const ARCHIVE_TIMEOUT_MS = 10_000;
+const ARCHIVE_RETRIES = 1;
+/** 失败结果缓存 30 秒：既挡住连续重试，也不会长期误伤 */
+const ARCHIVE_ERROR_TTL_MS = 30_000;
 
-async function archiveFetch(url: string): Promise<Awaited<ReturnType<typeof fetch>>> {
+async function archiveFetch(
+  url: string,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof fetch>>> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= ARCHIVE_RETRIES; attempt++) {
+    if (signal?.aborted) break;
     try {
       return await fetch(url, {
-        timeout: ARCHIVE_TIMEOUT_MS,
         headers: { 'User-Agent': 'PublicDomainCinema/1.0 (archive proxy)' },
-      } as never);
+        signal: mergeSignals(timeoutSignal(ARCHIVE_TIMEOUT_MS), signal),
+      });
     } catch (e) {
-      lastError = e as Error;
+      const err = e as Error & { type?: string };
+      const timedOut = err?.name === 'AbortError' || err?.name === 'TimeoutError';
+      lastError = timedOut ? new Error('archive.org 请求超时') : err;
+      // 超时说明链路不通，重试只会把等待时间翻倍
+      if (timedOut || signal?.aborted) break;
       if (attempt < ARCHIVE_RETRIES) {
-        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
       }
     }
   }
-  throw lastError ?? new Error('archive.org 请求失败');
+  throw lastError ?? new Error('archive.org 请求已取消');
 }
 
 /** 将底层网络错误转为用户可读说明 */
@@ -47,7 +59,7 @@ export function formatArchiveError(err: Error): string {
 const CACHE_TTL = 5 * 60 * 1000;
 
 function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
-  return apiCache.cached(key, CACHE_TTL, factory);
+  return apiCache.cached(key, CACHE_TTL, factory, { errorTtlMs: ARCHIVE_ERROR_TTL_MS });
 }
 
 /** 把 archive.org 的字符串/字符串数组字段统一成字符串 */
@@ -90,6 +102,7 @@ export async function searchMovies(
   query: string,
   page = 1,
   rows = 20,
+  signal?: AbortSignal,
 ): Promise<PaginatedResult<MovieListItem>> {
   const start = (page - 1) * rows;
   // 限定在 movies 集合、影视类型，且排除一些非视频子集合
@@ -110,7 +123,7 @@ export async function searchMovies(
 
   const cacheKey = `search:${url}`;
   return cached(cacheKey, async () => {
-    const res = await archiveFetch(url);
+    const res = await archiveFetch(url, signal);
     if (!res.ok) throw new Error(`archive.org search failed: ${res.status}`);
     const data = (await res.json()) as ArchiveSearchResponse;
     return {
@@ -130,12 +143,13 @@ export async function searchByKeyword(
   keyword: string,
   page = 1,
   rows = 20,
+  signal?: AbortSignal,
 ): Promise<PaginatedResult<MovieListItem>> {
   // 转义用户输入，构造为 title:"xxx" OR description:"xxx" OR subject:"xxx"
   const safe = keyword.replace(/["\\]/g, '').trim();
-  if (!safe) return searchMovies('', page, rows);
+  if (!safe) return searchMovies('', page, rows, signal);
   const query = `title:"${safe}" OR description:"${safe}" OR subject:"${safe}"`;
-  return searchMovies(query, page, rows);
+  return searchMovies(query, page, rows, signal);
 }
 
 /** 判断文件是否为浏览器可流式播放的视频格式 */

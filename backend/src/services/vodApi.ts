@@ -12,8 +12,10 @@ import type {
   VodCategory,
 } from '../types.js';
 
-const GLOBAL_SEARCH_BATCH = 12;
+const GLOBAL_SEARCH_CONCURRENCY = 12;
 const GLOBAL_SEARCH_ROWS_PER_SITE = 6;
+/** 全站搜索时单站等待上限：死站不该拖住整个结果 */
+const SEARCH_SITE_TIMEOUT_MS = 6_000;
 
 function cached<T>(key: string, factory: () => Promise<T>): Promise<T> {
   return apiCache.cached(key, getCacheTtlMs(), factory);
@@ -71,12 +73,17 @@ function candidateFetchUrls(url: string): string[] {
   return [...new Set(urls)];
 }
 
-async function fetchVodApi(url: string): Promise<VodApiResponse> {
+async function fetchVodApi(
+  url: string,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<VodApiResponse> {
   let lastError: Error | null = null;
 
   for (const tryUrl of candidateFetchUrls(url)) {
+    if (signal?.aborted) break;
     try {
-      const text = await fetchUpstreamText(tryUrl);
+      const text = await fetchUpstreamText(tryUrl, undefined, signal, timeoutMs);
       const data = JSON.parse(text) as VodApiResponse;
       if (data.code !== undefined && data.code !== 1) {
         throw new Error(data.msg || 'VOD API 返回错误');
@@ -168,10 +175,10 @@ function toListItem(
 /** MacCMS 线路分隔符（必须用正则，String.split('$$$') 在 JS 中会错误拆分） */
 const LINE_SEP = /\$\$\$/;
 
-/** 极速资源等站的 play 页链接补全为 m3u8 */
+/** 极速资源等站的 play 页链接补全为 m3u8（已带扩展名的真实文件不处理） */
 function normalizeStreamUrl(url: string): string {
   const u = url.trim();
-  if (/^https?:\/\/vv\.jisuzyv\.com\/play\/[^/]+$/i.test(u)) {
+  if (/^https?:\/\/vv\.jisuzyv\.com\/play\/[^/.]+$/i.test(u)) {
     return `${u}/index.m3u8`;
   }
   return u;
@@ -332,12 +339,39 @@ function sortSearchItems(items: MovieListItem[]): MovieListItem[] {
   });
 }
 
+/** 并发上限，避免一次性打出几十个连接；不阻塞等待整批完成 */
+async function runPool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<Array<PromiseSettledResult<R>>> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 /** 并行搜索全部 VOD 资源站 */
 export async function searchAllVodMovies(
   keyword: string,
   page = 1,
   rowsPerSite = GLOBAL_SEARCH_ROWS_PER_SITE,
   maxReturn = 20,
+  signal?: AbortSignal,
 ): Promise<GlobalSearchResult> {
   const safe = keyword.trim();
   const sources = listVodSources();
@@ -358,22 +392,20 @@ export async function searchAllVodMovies(
   let hasMore = false;
   let totalSum = 0;
 
-  for (let i = 0; i < sources.length; i += GLOBAL_SEARCH_BATCH) {
-    const batch = sources.slice(i, i + GLOBAL_SEARCH_BATCH);
-    const settled = await Promise.allSettled(
-      batch.map(({ key }) => searchVodMovies(key, safe, page, rowsPerSite)),
-    );
+  // 一次并发 + 上限，而不是「每批等最慢的一个」
+  const settled = await runPool(sources, GLOBAL_SEARCH_CONCURRENCY, ({ key }) =>
+    searchVodMovies(key, safe, page, rowsPerSite, signal),
+  );
 
-    for (const result of settled) {
-      if (result.status !== 'fulfilled') continue;
-      const { items: batchItems, total } = result.value;
-      totalSum += total;
-      if (batchItems.length === 0) continue;
-      sourcesHit++;
-      items.push(...batchItems);
-      if (batchItems.length >= rowsPerSite || page * rowsPerSite < total) {
-        hasMore = true;
-      }
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') continue;
+    const { items: batchItems, total } = result.value;
+    totalSum += total;
+    if (batchItems.length === 0) continue;
+    sourcesHit++;
+    items.push(...batchItems);
+    if (batchItems.length >= rowsPerSite || page * rowsPerSite < total) {
+      hasMore = true;
     }
   }
 
@@ -396,6 +428,7 @@ export async function searchVodMovies(
   keyword: string,
   page = 1,
   rows = 20,
+  signal?: AbortSignal,
 ): Promise<PaginatedResult<MovieListItem>> {
   const site = getVodSite(source);
   if (!site) throw new Error(`未知资源站: ${source}`);
@@ -407,7 +440,7 @@ export async function searchVodMovies(
   const cacheKey = `vod:search:${source}:${safe}:${page}`;
 
   return cached(cacheKey, async () => {
-    const data = await fetchVodApi(url);
+    const data = await fetchVodApi(url, signal, SEARCH_SITE_TIMEOUT_MS);
     const list = data.list ?? [];
     const limit = Number(data.limit) || rows;
     const items = list.map((v) => toListItem(source, site.name, v, site));

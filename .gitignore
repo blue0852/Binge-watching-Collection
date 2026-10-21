@@ -5,8 +5,14 @@ dist/
 .env.*
 tmp-*
 test-proxy.m3u8
+latency.json
+config.json.tmp
 .DS_Store
 Thumbs.db
 *.log
 pack/
 release/
+release-*/
+.tmp-*
+*.asar
+.workbuddy/

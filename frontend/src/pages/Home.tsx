@@ -45,10 +45,12 @@ export default function Home() {
   }
 
   useEffect(() => {
-    fetchSources().then((res) => {
-      const found = res.sources.find((s) => s.key === source);
-      setSourceName(found?.name || source);
-    });
+    fetchSources()
+      .then((res) => {
+        const found = res.sources.find((s) => s.key === source);
+        setSourceName(found?.name || source);
+      })
+      .catch(() => {});
   }, [source]);
 
   useEffect(() => {
@@ -56,66 +58,77 @@ export default function Home() {
       setCategoryName('');
       return;
     }
-    fetchCategories(source).then((res) => {
-      const found = res.categories.find((c) => c.typeId === typeId);
-      setCategoryName(found?.typeName || '');
-    });
+    fetchCategories(source)
+      .then((res) => {
+        const found = res.categories.find((c) => c.typeId === typeId);
+        setCategoryName(found?.typeName || '');
+      })
+      .catch(() => {});
   }, [source, typeId]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
+
     setLoading(true);
     setError(null);
+    // 切换站点/搜索时先清空旧结果，避免失败后仍显示上一批数据
+    setItems([]);
+    setTotal(0);
+    setHasMore(false);
 
-    const onDone = () => {
-      if (!cancelled) setLoading(false);
+    const loadList = async () => {
+      if (isGlobalSearch) {
+        const res = await searchMoviesGlobal(query, page, PAGE_SIZE, signal);
+        return {
+          items: res.items,
+          total: res.total,
+          hasMore: res.hasMore,
+          sourcesHit: res.sourcesHit,
+          sourcesTotal: res.sourcesTotal,
+        };
+      }
+      if (isSiteSearch) {
+        const res = await searchMovies(query, page, PAGE_SIZE, source, signal);
+        return {
+          items: res.items,
+          total: res.total,
+          hasMore: page * PAGE_SIZE < res.total,
+          sourcesHit: 0,
+          sourcesTotal: 0,
+        };
+      }
+      const res = await fetchMovies(page, PAGE_SIZE, source, typeId || undefined, signal);
+      return {
+        items: res.items,
+        total: res.total,
+        hasMore: page * PAGE_SIZE < res.total,
+        sourcesHit: 0,
+        sourcesTotal: 0,
+      };
     };
 
-    if (isGlobalSearch) {
-      searchMoviesGlobal(query, page, PAGE_SIZE)
-        .then((res) => {
-          if (cancelled) return;
-          setItems(res.items);
-          setTotal(res.total);
-          setSourcesHit(res.sourcesHit);
-          setSourcesTotal(res.sourcesTotal);
-          setHasMore(res.hasMore);
-        })
-        .catch((e: Error) => {
-          if (!cancelled) setError(e.message);
-        })
-        .finally(onDone);
-    } else if (isSiteSearch) {
-      searchMovies(query, page, PAGE_SIZE, source)
-        .then((res) => {
-          if (cancelled) return;
-          setItems(res.items);
-          setTotal(res.total);
-          setSourcesHit(0);
-          setSourcesTotal(0);
-          setHasMore(page * PAGE_SIZE < res.total);
-        })
-        .catch((e: Error) => {
-          if (!cancelled) setError(e.message);
-        })
-        .finally(onDone);
-    } else {
-      fetchMovies(page, PAGE_SIZE, source, typeId || undefined)
-        .then((res) => {
-          if (cancelled) return;
-          setItems(res.items);
-          setTotal(res.total);
-          setHasMore(page * PAGE_SIZE < res.total);
-        })
-        .catch((e: Error) => {
-          if (!cancelled) setError(e.message);
-        })
-        .finally(onDone);
-    }
+    loadList()
+      .then((res) => {
+        if (signal.aborted) return;
+        setItems(res.items);
+        setTotal(res.total);
+        setHasMore(res.hasMore);
+        setSourcesHit(res.sourcesHit);
+        setSourcesTotal(res.sourcesTotal);
+      })
+      .catch((e: Error) => {
+        if (signal.aborted) return;
+        setError(e.message);
+        setItems([]);
+        setTotal(0);
+        setHasMore(false);
+      })
+      .finally(() => {
+        if (!signal.aborted) setLoading(false);
+      });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [query, page, source, typeId, isGlobalSearch, isSiteSearch]);
 
   const isArchive = source === 'archive';

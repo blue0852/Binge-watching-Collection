@@ -8,6 +8,8 @@ interface Props {
   latencies: Record<string, number | null>;
   latencyLoading: boolean;
   onChange: (key: string) => void;
+  /** 首次展开下拉框时触发（用于延迟探测资源站延迟） */
+  onMenuOpen?: () => void;
 }
 
 function latencyText(key: string, latencies: Record<string, number | null>, loading: boolean): string {
@@ -21,6 +23,7 @@ export default function SourceSelect({
   latencies,
   latencyLoading,
   onChange,
+  onMenuOpen,
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -52,7 +55,10 @@ export default function SourceSelect({
         aria-label="选择资源站"
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open) onMenuOpen?.();
+          setOpen(!open);
+        }}
       >
         <span className="source-picker-name">{current.name}</span>
         <span

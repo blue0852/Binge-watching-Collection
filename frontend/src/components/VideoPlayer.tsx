@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Hls from 'hls.js';
+import type { HlsConfig } from 'hls.js';
 import Pagination from './Pagination.js';
 import { getHistoryEntry, upsertPlayHistory } from '../utils/playHistory.js';
 import { getPlayerSettings, savePlayerSettings } from '../utils/playerSettings.js';
@@ -10,7 +11,7 @@ const EPISODES_PER_PAGE = 20;
 const SEEK_STEP_SECONDS = 10;
 
 /** m3u8 / HLS 专用：预取分片、容错与缓冲 */
-const HLS_PLAYER_CONFIG: Partial<Hls['config']> = {
+const HLS_PLAYER_CONFIG: Partial<HlsConfig> = {
   enableWorker: true,
   autoStartLoad: true,
   startFragPrefetch: true,
@@ -150,6 +151,9 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
   const hlsRef = useRef<Hls | null>(null);
   const restoredUrlRef = useRef<string | null>(null);
   const lastHistorySaveRef = useRef(0);
+  /** timeupdate 每 250ms 触发一次，只在整秒变化时更新 state，避免整棵选集列表重渲染 */
+  const lastPlaybackSecondRef = useRef(-1);
+  const lastDurationSecondRef = useRef(-1);
   const hideControlsTimerRef = useRef<number | null>(null);
   const outroSkippedRef = useRef(false);
   const [introSkipped, setIntroSkipped] = useState(false);
@@ -262,6 +266,8 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
 
   useEffect(() => {
     restoredUrlRef.current = null;
+    lastPlaybackSecondRef.current = -1;
+    lastDurationSecondRef.current = -1;
     setIntroSkipped(false);
     setPlaybackTime(0);
     setDuration(0);
@@ -577,8 +583,18 @@ export default function VideoPlayer({ files, poster, title, sourceLabel, history
                   const v = e.currentTarget;
                   const t = v.currentTime;
                   const dur = Number.isFinite(v.duration) ? v.duration : duration;
-                  setPlaybackTime(t);
-                  if (Number.isFinite(v.duration)) setDuration(v.duration);
+                  const sec = Math.floor(t);
+                  if (sec !== lastPlaybackSecondRef.current) {
+                    lastPlaybackSecondRef.current = sec;
+                    setPlaybackTime(t);
+                  }
+                  if (
+                    Number.isFinite(v.duration) &&
+                    Math.floor(v.duration) !== lastDurationSecondRef.current
+                  ) {
+                    lastDurationSecondRef.current = Math.floor(v.duration);
+                    setDuration(v.duration);
+                  }
                   if (Number.isFinite(dur) && dur > 0) tryAutoSkipOutro(t, dur);
                   persistHistory(false);
                 }}

@@ -4,7 +4,7 @@
 
 ## 功能概览
 
-- **多资源站切换**：顶部下拉选择数据源（默认「电影天堂」），含 Internet Archive 与约 56 个已探测可用的 VOD 站
+- **多资源站切换**：顶部下拉选择数据源（默认「电影天堂」），含 Internet Archive 与约 28 个已探测可用的 VOD 站（按 API 主机去重后）
 - **分类标签**：按资源站返回的 `class` 分类筛选（无 `type_pid` 的站点以扁平标签展示）
 - **搜索与分页**：关键词搜索、加载更多
 - **详情播放**：选集 / 多线路；m3u8 使用 [hls.js](https://github.com/video-dev/hls.js)
@@ -38,6 +38,15 @@ npm start
 # 访问 http://localhost:3002
 ```
 
+维护命令：
+
+| 命令 | 说明 |
+|------|------|
+| `npm run typecheck` | 前后端 TypeScript 类型检查 |
+| `npm test` | 播放地址解析单测（`$$$` / `#` / `$` 三种分隔符） |
+
+> 后端有两套产物：`backend/dist/server.js` 由 `tsc` 生成（`npm start` / 开发用），`pack/app/backend/dist/server.bundle.mjs` 由 `prepare:pack` 用 esbuild 生成（Electron 打包用）。只跑 `tsc` 不会更新打包目录。
+
 ## 打包为 Windows exe
 
 使用 Electron 将前后端与 `config.json` 打成桌面应用（内置本地服务，无需单独安装 Node.js）：
@@ -60,14 +69,14 @@ npm run pack:portable
 
 | 文件 | 说明 |
 |------|------|
-| `Public Domain Cinema-1.0.0-portable.exe` | 绿色便携版，双击即用 |
-| `Public Domain Cinema-1.0.0-setup.exe` | 安装版 |
+| `Public Domain Cinema-1.0.5-portable.exe` | 绿色便携版，双击即用 |
+| `Public Domain Cinema-1.0.5-setup.exe` | 安装版 |
 
 仅生成未压缩目录（调试打包用）：`npm run pack:dir`
 
-打包前会自动执行 `npm run build` 与 `prepare:pack`（复制构建产物并在 `pack/app` 安装后端运行时依赖）。首次打包会下载 Electron，体积约 150MB+，属正常现象。
+打包前会自动执行 `npm run build` 与 `prepare:pack`（复制构建产物并在 `pack/app` 安装后端运行时依赖）。首次打包会下载 Electron，便携/安装包约 72MB（含完整 Chromium 与语言包，去掉调试 map）。属正常现象。
 
-**桌面版配置路径**：便携版将 `config.json` 保存在 **exe 同目录**（U 盘拷贝时配置一并带走）；安装版保存在 `%APPDATA%\Public Domain Cinema\config.json`（安装目录通常不可写）。首次启动从内置默认配置复制；在「站点管理」页可查看实际路径。
+**桌面版数据路径**：便携版将 `config.json`、`server-port.json`（固定本地服务端口，供播放历史等浏览器存储复用同一站点）与 Chromium 用户数据保存在 **exe 同目录**；安装版保存在 `%APPDATA%\Public Domain Cinema\`（安装目录通常不可写）。首次启动从内置默认配置复制；在「站点管理」页可查看 config 实际路径。
 
 **发布说明**：`release/` 已在 `.gitignore` 中，**不要将 exe 提交到 Git 仓库**（避免仓库体积膨胀）。打包完成后，在 GitHub **Releases** 页创建新版本，将 `release/` 下的 portable / setup 安装包作为**附件**上传即可。
 
@@ -120,12 +129,18 @@ public-domain-cinema/
       "name": "电影天堂",
       "detail": "http://..."
     }
-  }
+  },
+  "proxy": "http://127.0.0.1:7897",
+  "proxy_mode": "fallback"
 }
 ```
 
 - **`cache_time`**：后端内存缓存秒数（列表、分类、详情、封面补全等）
 - **`api_site`**：key 为前端/接口使用的 `source`；`api` 为 MacCMS 采集地址
+- **`proxy`**（可选）：上游请求代理，支持 `http://`、`https://`、`socks5://`
+- **`proxy_mode`**（可选）：`fallback`（默认，直连失败才走代理）或 `always`（全部走代理）
+
+> 部分站点在境内会被 TLS/SNI 阻断（表现为 `ECONNRESET`），配置本地代理后由后端自动回退。修改后需重启应用生效。
 
 ### 清理不可用站点
 
@@ -136,6 +151,8 @@ node scripts/check-sites.mjs
 ```
 
 脚本会对每个站点请求 `?ac=list&pg=1`（8 秒超时，HTTP 失败时尝试 HTTPS），**直接覆盖** `config.json`，仅保留返回 `code: 1` 且含列表/分类数据的站点。执行前请自行备份配置。
+
+> 该脚本走直连、不读取 `proxy` 配置，因此开启代理时会把"仅代理可达"的站点误判为失效。需要代理的环境请改用「站点管理」页内的删除功能，或先关闭代理再运行。
 
 ## 数据源
 

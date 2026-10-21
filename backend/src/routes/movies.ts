@@ -1,7 +1,7 @@
 // 影视相关路由
 
 import { Router } from 'express';
-import { addVodSite, listVodSources, removeVodSite } from '../config.js';
+import { addVodSite, getProxySettings, listVodSources, removeVodSite, setProxySettings } from '../config.js';
 import { getConfigPath } from '../paths.js';
 import {
   searchMovies,
@@ -25,6 +25,9 @@ export const moviesRouter = Router();
 
 const ARCHIVE_SOURCE = 'archive';
 const DEFAULT_VOD_SOURCE = 'dyttzy';
+/** 全站搜索总预算：VOD 侧 7s，archive 侧 2.5s，超时返回已拿到的部分结果 */
+const GLOBAL_VOD_BUDGET_MS = 7_000;
+const ARCHIVE_BUDGET_MS = 2_500;
 
 function resolveSource(raw: unknown): string {
   const s = String(raw || '').trim();
@@ -95,6 +98,28 @@ moviesRouter.post('/sites', (req, res) => {
     const msg = (e as Error).message;
     const status = msg.includes('已存在') ? 409 : 400;
     res.status(status).json({ error: msg });
+  }
+});
+
+/**
+ * GET /api/movies/proxy
+ * 读取上游代理设置
+ */
+moviesRouter.get('/proxy', (_req, res) => {
+  res.json(getProxySettings());
+});
+
+/**
+ * POST /api/movies/proxy
+ * 设置上游代理：{"proxy":"http://127.0.0.1:7897","mode":"fallback"}
+ * 传 {"proxy":null} 关闭代理
+ */
+moviesRouter.post('/proxy', (req, res) => {
+  try {
+    const body = (req.body ?? {}) as { proxy?: string | null; mode?: 'always' | 'fallback' };
+    res.json(setProxySettings({ proxy: body.proxy ?? null, mode: body.mode }));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
   }
 });
 
@@ -192,9 +217,13 @@ moviesRouter.get('/search/global', async (req, res) => {
       return;
     }
 
+    // archive.org 在国内常不可达：给单独的短预算，且必须能被取消，
+    // 否则 Promise.all 会一直等它把 VOD 已经返回的结果一起拖住。
     const [vodResult, archiveResult] = await Promise.all([
-      searchAllVodMovies(q, page, 6, rows),
-      searchByKeyword(q, page, Math.min(rows, 8)).catch(() => null),
+      searchAllVodMovies(q, page, 6, rows, AbortSignal.timeout(GLOBAL_VOD_BUDGET_MS)),
+      searchByKeyword(q, page, Math.min(rows, 8), AbortSignal.timeout(ARCHIVE_BUDGET_MS)).catch(
+        () => null,
+      ),
     ]);
 
     let items: MovieListItem[] = [...vodResult.items];

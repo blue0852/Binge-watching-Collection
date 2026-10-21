@@ -1,17 +1,21 @@
 {
   "name": "backend",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "private": true,
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "test": "tsx --test src/services/vodApi.test.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {
     "express": "^4.21.2",
-    "node-fetch": "^3.3.2"
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "node-fetch": "^3.3.2",
+    "socks-proxy-agent": "^7.0.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

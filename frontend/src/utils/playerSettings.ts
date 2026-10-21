@@ -8,8 +8,9 @@ export interface PlayerSettings {
 }
 
 const DEFAULTS: PlayerSettings = {
-  introSkipSeconds: 90,
-  outroSkipSeconds: 90,
+  // 默认不跳片头：电影从 0 秒开始播会被直接跳过，需用户在播放器里显式设置
+  introSkipSeconds: 0,
+  outroSkipSeconds: 0,
 };
 
 function clampSeconds(value: number): number {

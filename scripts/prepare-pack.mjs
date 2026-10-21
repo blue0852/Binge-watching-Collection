@@ -27,13 +27,14 @@ try {
 }
 mkdirSync(packRoot, { recursive: true });
 
-console.log('→ 复制后端、前端、配置 …');
-cpSync(backendDistSrc, backendDistPack, { recursive: true });
+console.log('→ 复制前端、配置（不含 source map）…');
 cpSync(path.join(root, 'frontend', 'dist'), path.join(packRoot, 'frontend', 'dist'), {
   recursive: true,
+  filter: (src) => !src.endsWith('.map'),
 });
 cpSync(path.join(root, 'config.json'), path.join(packRoot, 'config.json'));
 
+mkdirSync(backendDistPack, { recursive: true });
 console.log('→ 打包后端为单文件（含 express 等依赖）…');
 buildSync({
   entryPoints: [path.join(backendDistSrc, 'server.js')],

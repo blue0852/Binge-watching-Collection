@@ -1,21 +1,50 @@
-import { Routes, Route } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { Routes, Route, Link } from 'react-router-dom';
 import Header from './components/Header.js';
 import Home from './pages/Home.js';
-import MovieDetail from './pages/MovieDetail.js';
-import Sites from './pages/Sites.js';
-import History from './pages/History.js';
+import ErrorBoundary from './components/ErrorBoundary.js';
+
+// 详情页会把 hls.js 一起带进来，首页用不到，按需加载
+const MovieDetail = lazy(() => import('./pages/MovieDetail.js'));
+const Sites = lazy(() => import('./pages/Sites.js'));
+const History = lazy(() => import('./pages/History.js'));
+
+function PageFallback() {
+  return (
+    <div className="loading">
+      <div className="spinner" />
+      <p>正在加载…</p>
+    </div>
+  );
+}
+
+function NotFound() {
+  return (
+    <div className="empty">
+      <p>页面不存在</p>
+      <p className="hint" style={{ marginTop: 8 }}>
+        <Link to="/">返回首页</Link>
+      </p>
+    </div>
+  );
+}
 
 export default function App() {
   return (
     <div className="app">
       <Header />
       <main className="main">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/movie/:id" element={<MovieDetail />} />
-          <Route path="/sites" element={<Sites />} />
-          <Route path="/history" element={<History />} />
-        </Routes>
+        <ErrorBoundary>
+          <Suspense fallback={<PageFallback />}>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/movie/:id" element={<MovieDetail />} />
+              <Route path="/sites" element={<Sites />} />
+              <Route path="/history" element={<History />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
       </main>
       <footer className="footer">
         <p>

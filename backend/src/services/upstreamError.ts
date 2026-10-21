@@ -57,5 +57,9 @@ export function shouldSkipWindowsFallback(err: Error): boolean {
   const status = extractHttpStatus(err.message);
   if (status !== null && [401, 403, 404, 429].includes(status)) return true;
   if (looksLikeWafOrHtml(err.message)) return true;
+  // 超时 / DNS 失败 / 连接被拒：链路本身不通，PowerShell 回退只会把等待时间翻倍
+  if (/超时|timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|socket hang up/i.test(err.message)) {
+    return true;
+  }
   return false;
 }

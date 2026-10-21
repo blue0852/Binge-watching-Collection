@@ -118,11 +118,12 @@ export function fetchMovies(
   rows = 20,
   source?: string,
   typeId?: number,
+  signal?: AbortSignal,
 ): Promise<PaginatedResult<MovieListItem>> {
   const params = new URLSearchParams({ page: String(page), rows: String(rows) });
   if (source) params.set('source', source);
   if (typeId) params.set('type', String(typeId));
-  return request<PaginatedResult<MovieListItem>>(`${API_BASE}/movies?${params}`);
+  return request<PaginatedResult<MovieListItem>>(`${API_BASE}/movies?${params}`, { signal });
 }
 
 /** 全站聚合搜索 */
@@ -130,15 +131,14 @@ export function searchMoviesGlobal(
   q: string,
   page = 1,
   rows = 20,
+  signal?: AbortSignal,
 ): Promise<GlobalSearchResult> {
   const params = new URLSearchParams({
     q,
     page: String(page),
     rows: String(rows),
   });
-  return request<GlobalSearchResult>(
-    `${API_BASE}/movies/search/global?${params}`,
-  );
+  return request<GlobalSearchResult>(`${API_BASE}/movies/search/global?${params}`, { signal });
 }
 
 /** 关键词搜索（单站） */
@@ -147,6 +147,7 @@ export function searchMovies(
   page = 1,
   rows = 20,
   source?: string,
+  signal?: AbortSignal,
 ): Promise<PaginatedResult<MovieListItem>> {
   const params = new URLSearchParams({
     q,
@@ -154,9 +155,7 @@ export function searchMovies(
     rows: String(rows),
   });
   if (source) params.set('source', source);
-  return request<PaginatedResult<MovieListItem>>(
-    `${API_BASE}/movies/search?${params}`,
-  );
+  return request<PaginatedResult<MovieListItem>>(`${API_BASE}/movies/search?${params}`, { signal });
 }
 
 /** 获取详情 */

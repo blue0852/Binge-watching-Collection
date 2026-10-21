@@ -5,6 +5,7 @@ import {
   fetchUpstreamBuffer,
   pipeUpstreamToResponse,
 } from '../services/upstreamFetch.js';
+import { parseProxyUrl } from '../services/http.js';
 import {
   getCachedPlaylist,
   getCachedSegment,
@@ -13,10 +14,6 @@ import {
 } from '../services/streamSegmentCache.js';
 
 export const streamRouter = Router();
-
-function isAllowedUrl(raw: string): boolean {
-  return raw.startsWith('http://') || raw.startsWith('https://');
-}
 
 function isM3u8Body(url: string, contentType: string, text: string): boolean {
   if (url.includes('.m3u8')) return true;
@@ -78,27 +75,30 @@ function sendCachedSegment(
  */
 streamRouter.get('/', async (req, res) => {
   const raw = String(req.query.url || '').trim();
-  if (!isAllowedUrl(raw)) {
+  // 只放行公网 http(s)：避免该接口被当成访问内网的跳板
+  const parsed = parseProxyUrl(raw);
+  if (!parsed) {
     res.status(400).json({ error: '无效的流媒体 URL' });
     return;
   }
+  const targetUrl = parsed.href;
 
   try {
-    if (!urlLooksLikeM3u8(raw)) {
-      if (isCacheableSegmentUrl(raw) && !req.headers.range) {
-        const hit = getCachedSegment(raw);
+    if (!urlLooksLikeM3u8(targetUrl)) {
+      if (isCacheableSegmentUrl(targetUrl) && !req.headers.range) {
+        const hit = getCachedSegment(targetUrl);
         if (hit) {
           sendCachedSegment(res, hit);
           return;
         }
       }
-      await pipeUpstreamToResponse(raw, req, res, {
-        cacheSegment: isCacheableSegmentUrl(raw),
+      await pipeUpstreamToResponse(targetUrl, req, res, {
+        cacheSegment: isCacheableSegmentUrl(targetUrl),
       });
       return;
     }
 
-    const cachedPlaylist = getCachedPlaylist(raw);
+    const cachedPlaylist = getCachedPlaylist(targetUrl);
     if (cachedPlaylist) {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
       res.setHeader('Cache-Control', 'private, max-age=45');
@@ -107,12 +107,12 @@ streamRouter.get('/', async (req, res) => {
       return;
     }
 
-    const { buffer, contentType } = await fetchUpstreamBuffer(raw);
+    const { buffer, contentType } = await fetchUpstreamBuffer(targetUrl);
     const text = buffer.toString('utf8');
 
-    if (isM3u8Body(raw, contentType, text)) {
-      const rewritten = rewriteM3u8(text, raw);
-      putCachedPlaylist(raw, rewritten);
+    if (isM3u8Body(targetUrl, contentType, text)) {
+      const rewritten = rewriteM3u8(text, targetUrl);
+      putCachedPlaylist(targetUrl, rewritten);
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
       res.setHeader('Cache-Control', 'private, max-age=45');
       res.send(rewritten);

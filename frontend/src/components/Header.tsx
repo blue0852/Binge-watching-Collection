@@ -1,5 +1,5 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { useState, useEffect, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { clearClientCache, fetchSourceLatencies, fetchSources, refreshServerCache } from '../api/client.js';
 import HistoryPopover from './HistoryPopover.js';
 import SourceSelect from './SourceSelect.js';
@@ -21,6 +21,7 @@ export default function Header() {
   const [refreshing, setRefreshing] = useState(false);
   const [latencies, setLatencies] = useState<Record<string, number | null>>({});
   const [latencyLoading, setLatencyLoading] = useState(false);
+  const lastLatencyFetchRef = useRef(0);
 
   useEffect(() => {
     fetchSources()
@@ -33,24 +34,19 @@ export default function Header() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (sources.length === 0) return;
-    let cancelled = false;
+  /** 延迟探测：只在用户展开资源站下拉框时触发，避免一进首页就外连几十个站 */
+  const ensureLatencies = useCallback(() => {
+    if (Date.now() - lastLatencyFetchRef.current < 60_000) return;
+    lastLatencyFetchRef.current = Date.now();
     setLatencyLoading(true);
     fetchSourceLatencies()
-      .then((res) => {
-        if (!cancelled) setLatencies(res.latencies);
-      })
+      .then((res) => setLatencies(res.latencies))
       .catch(() => {
-        if (!cancelled) setLatencies({});
+        lastLatencyFetchRef.current = 0;
+        setLatencies({});
       })
-      .finally(() => {
-        if (!cancelled) setLatencyLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sources.length]);
+      .finally(() => setLatencyLoading(false));
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -166,6 +162,7 @@ export default function Header() {
               latencies={latencies}
               latencyLoading={latencyLoading}
               onChange={onSourceChange}
+              onMenuOpen={ensureLatencies}
             />
           )}
           <select

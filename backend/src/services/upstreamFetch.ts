@@ -7,11 +7,22 @@ import https from 'node:https';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import fetch from 'node-fetch';
+import { loadConfig } from '../config.js';
+import { createProxyAgent, mergeSignals, timeoutSignal } from './http.js';
 import { isCacheableSegmentUrl, putCachedSegment } from './streamSegmentCache.js';
 import { formatUpstreamErrorMessage, shouldSkipWindowsFallback } from './upstreamError.js';
 
 const execFileAsync = promisify(execFile);
 const AGENT_OPTS = { keepAlive: true, maxSockets: 64, keepAliveMsecs: 30_000 };
+/** 单个上游响应体上限，避免异常源把进程内存打满 */
+const MAX_UPSTREAM_BYTES = 16 * 1024 * 1024;
+/** 等待上游响应头的上限（只约束首字节，不打断已开始的播放） */
+const UPSTREAM_HEADER_TIMEOUT_MS = 20_000;
+/**
+ * fallback 模式下直连的探测预算。
+ * 被阻断的域名通常在 TLS 阶段秒级 RST，6s 足够；真正慢的站点交给代理。
+ */
+const DIRECT_PROBE_MS = 6_000;
 const httpAgent = new http.Agent(AGENT_OPTS);
 const httpsAgent = new https.Agent({ ...AGENT_OPTS, rejectUnauthorized: false });
 
@@ -20,6 +31,23 @@ function agentFor(url: string): http.Agent | https.Agent {
 }
 
 export { agentFor };
+
+interface ProxySetting {
+  url: string;
+  mode: 'always' | 'fallback';
+}
+
+/** 读取 config.json 的 proxy；未配置则返回 null（保持原有直连行为） */
+function proxySetting(): ProxySetting | null {
+  try {
+    const cfg = loadConfig();
+    const url = typeof cfg.proxy === 'string' ? cfg.proxy.trim() : '';
+    if (!url) return null;
+    return { url, mode: cfg.proxy_mode === 'always' ? 'always' : 'fallback' };
+  } catch {
+    return null;
+  }
+}
 
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -45,6 +73,15 @@ function looksLikeHtml(text: string): boolean {
 
 function wrapUpstreamError(err: Error): Error {
   return new Error(formatUpstreamErrorMessage(err));
+}
+
+/** node-fetch 的超时/取消统一转成可读错误，便于写入失败缓存 */
+function normalizeFetchError(e: unknown): Error {
+  const err = e as Error & { type?: string };
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+    return new Error('上游请求超时');
+  }
+  return err instanceof Error ? err : new Error(String(e));
 }
 
 function psQuote(raw: string): string {
@@ -92,7 +129,7 @@ async function winFetchBuffer(url: string, headers: Record<string, string>): Pro
   const { stdout } = await execFileAsync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-Command', script],
-    { maxBuffer: 50 * 1024 * 1024, timeout: 30000, encoding: 'buffer' },
+    { maxBuffer: MAX_UPSTREAM_BYTES, timeout: 30000, encoding: 'buffer' },
   );
   return stdout;
 }
@@ -109,39 +146,106 @@ async function nodeFetchBuffer(
   url: string,
   headers: Record<string, string>,
   timeoutMs: number,
+  maxBytes = MAX_UPSTREAM_BYTES,
+  agent: http.Agent = agentFor(url),
 ): Promise<{ buffer: Buffer; contentType: string }> {
   const res = await fetch(url, {
     headers,
-    agent: agentFor(url),
-    timeout: timeoutMs,
-  } as never);
+    agent,
+    signal: timeoutSignal(timeoutMs),
+  });
   if (!res.ok) throw new Error(`上游请求失败: ${res.status}`);
+
+  const declared = Number(res.headers.get('content-length') || 0);
+  if (declared > maxBytes) {
+    (res.body as unknown as Readable | null)?.destroy();
+    throw new Error(`上游响应过大：${declared} 字节`);
+  }
+
   const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length > maxBytes) {
+    throw new Error(`上游响应过大：${buffer.length} 字节`);
+  }
   const contentType = res.headers.get('content-type') || 'application/octet-stream';
   return { buffer, contentType };
 }
 
-/** 请求上游并返回响应正文（优先 Node；Windows 遇 WAF/证书问题时回退系统 HTTP） */
+/** 单次文本请求（不含回退逻辑） */
+async function fetchTextAttempt(
+  url: string,
+  headers: Record<string, string>,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  agent: http.Agent,
+): Promise<string> {
+  const res = await fetch(url, {
+    headers,
+    agent,
+    signal: mergeSignals(timeoutSignal(timeoutMs), signal),
+  });
+  if (!res.ok) throw new Error(`上游请求失败: ${res.status}`);
+  const text = await res.text();
+  if (looksLikeHtml(text)) {
+    throw new Error('上游返回 HTML 页面（可能被 WAF 拦截）');
+  }
+  return text;
+}
+
+/**
+ * 请求上游并返回响应正文。
+ * 顺序：代理(always) → 直连 → 代理(fallback) → Windows 系统 HTTP 回退。
+ * 配置了 proxy 后，被 TLS 阻断的域名会由代理兜底，不影响可直连站点的速度。
+ */
 export async function fetchUpstreamText(
   url: string,
   extraHeaders?: Record<string, string>,
+  signal?: AbortSignal,
+  timeoutMs = 15_000,
 ): Promise<string> {
   const headers = buildHeaders(url, extraHeaders);
+  const proxy = proxySetting();
+
+  if (proxy && proxy.mode === 'always') {
+    try {
+      return await fetchTextAttempt(
+        url,
+        headers,
+        signal,
+        timeoutMs,
+        createProxyAgent(url, proxy.url),
+      );
+    } catch (e) {
+      throw wrapUpstreamError(normalizeFetchError(e));
+    }
+  }
 
   let nodeError: Error | null = null;
+  const directBudget = proxy ? Math.min(timeoutMs, DIRECT_PROBE_MS) : timeoutMs;
 
   try {
-    const res = await fetch(url, {
-      headers,
-      agent: agentFor(url),
-      timeout: 15000,
-    } as never);
-    if (!res.ok) throw new Error(`上游请求失败: ${res.status}`);
-    const text = await res.text();
-    if (!looksLikeHtml(text)) return text;
-    nodeError = new Error('上游返回 HTML 页面（可能被 WAF 拦截）');
+    return await fetchTextAttempt(url, headers, signal, directBudget, agentFor(url));
   } catch (e) {
-    nodeError = e as Error;
+    nodeError = normalizeFetchError(e);
+  }
+
+  // 外部预算耗尽（如全站搜索 7s 截止）时不再重试
+  if (signal?.aborted) throw wrapUpstreamError(nodeError ?? new Error('上游请求超时'));
+
+  if (proxy) {
+    try {
+      return await fetchTextAttempt(
+        url,
+        headers,
+        signal,
+        timeoutMs,
+        createProxyAgent(url, proxy.url),
+      );
+    } catch (e) {
+      const proxyError = normalizeFetchError(e);
+      throw wrapUpstreamError(
+        new Error(`直连失败：${nodeError.message}；代理重试失败：${proxyError.message}`),
+      );
+    }
   }
 
   if (process.platform !== 'win32' || (nodeError && shouldSkipWindowsFallback(nodeError))) {
@@ -162,23 +266,57 @@ export async function fetchUpstreamText(
   }
 }
 
-/** 请求上游二进制（m3u8 分片、mp4 等） */
+/** 请求上游二进制（m3u8 分片、mp4 等）；配置代理时直连失败会自动经代理重试 */
 export async function fetchUpstreamBuffer(
   url: string,
   extraHeaders?: Record<string, string>,
   timeoutMs = 30000,
+  maxBytes = MAX_UPSTREAM_BYTES,
 ): Promise<{ buffer: Buffer; contentType: string }> {
   const headers = {
     ...buildHeaders(url, extraHeaders),
     Accept: '*/*',
   };
+  const proxy = proxySetting();
+
+  if (proxy && proxy.mode === 'always') {
+    try {
+      return await nodeFetchBuffer(
+        url,
+        headers,
+        timeoutMs,
+        maxBytes,
+        createProxyAgent(url, proxy.url),
+      );
+    } catch (e) {
+      throw wrapUpstreamError(normalizeFetchError(e));
+    }
+  }
 
   let nodeError: Error | null = null;
+  const directBudget = proxy ? Math.min(timeoutMs, DIRECT_PROBE_MS) : timeoutMs;
 
   try {
-    return await nodeFetchBuffer(url, headers, timeoutMs);
+    return await nodeFetchBuffer(url, headers, directBudget, maxBytes);
   } catch (e) {
-    nodeError = e as Error;
+    nodeError = normalizeFetchError(e);
+  }
+
+  if (proxy) {
+    try {
+      return await nodeFetchBuffer(
+        url,
+        headers,
+        timeoutMs,
+        maxBytes,
+        createProxyAgent(url, proxy.url),
+      );
+    } catch (e) {
+      const proxyError = normalizeFetchError(e);
+      throw wrapUpstreamError(
+        new Error(`直连失败：${nodeError.message}；代理重试失败：${proxyError.message}`),
+      );
+    }
   }
 
   if (process.platform !== 'win32' || (nodeError && shouldSkipWindowsFallback(nodeError))) {
@@ -235,21 +373,48 @@ export async function pipeUpstreamToResponse(
     Boolean(options?.cacheSegment) && !hasRange && isCacheableSegmentUrl(url);
 
   let upstream: Awaited<ReturnType<typeof fetch>>;
+  const proxy = proxySetting();
+
+  // 只约束「等响应头」阶段：拿到响应头后立即清除定时器，避免打断正在播放的分片
+  const headerFetch = async (agent: http.Agent): Promise<Awaited<ReturnType<typeof fetch>>> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_HEADER_TIMEOUT_MS);
+    try {
+      return await fetch(url, { headers, agent, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const proxyFirst = proxy?.mode === 'always' && proxy.url;
   try {
-    upstream = await fetch(url, {
-      headers,
-      agent: agentFor(url),
-    } as never);
-  } catch (e) {
-    if (process.platform !== 'win32') throw e;
-    const { buffer, contentType } = await fetchUpstreamBuffer(url);
-    if (clientRes.headersSent) return;
-    clientRes.setHeader('Content-Type', contentType);
-    clientRes.setHeader('Cache-Control', 'public, max-age=3600');
-    clientRes.setHeader('Accept-Ranges', 'bytes');
-    clientRes.statusCode = 200;
-    clientRes.end(buffer);
-    return;
+    upstream = await headerFetch(
+      proxyFirst ? createProxyAgent(url, proxyFirst) : agentFor(url),
+    );
+  } catch (raw) {
+    if (proxy) {
+      // 另一条路径重试：always 模式改为直连，fallback 模式改为走代理
+      try {
+        upstream = await headerFetch(
+          proxyFirst ? agentFor(url) : createProxyAgent(url, proxy.url),
+        );
+      } catch (raw2) {
+        throw normalizeFetchError(raw2);
+      }
+    } else if (process.platform === 'win32') {
+      const e = normalizeFetchError(raw);
+      if (e.message === '上游请求超时') throw e;
+      const { buffer, contentType } = await fetchUpstreamBuffer(url);
+      if (clientRes.headersSent) return;
+      clientRes.setHeader('Content-Type', contentType);
+      clientRes.setHeader('Cache-Control', 'public, max-age=3600');
+      clientRes.setHeader('Accept-Ranges', 'bytes');
+      clientRes.statusCode = 200;
+      clientRes.end(buffer);
+      return;
+    } else {
+      throw normalizeFetchError(raw);
+    }
   }
 
   if (!upstream.ok && upstream.status !== 206) {

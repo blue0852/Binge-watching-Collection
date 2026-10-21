@@ -1,6 +1,6 @@
 // 加载项目根目录 config.json
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { getConfigPath } from './paths.js';
 
 export interface VodSiteConfig {
@@ -12,14 +12,53 @@ export interface VodSiteConfig {
 export interface AppConfig {
   cache_time: number;
   api_site: Record<string, VodSiteConfig>;
+  /** 上游代理地址，如 http://127.0.0.1:7897 或 socks5://127.0.0.1:7890 */
+  proxy?: string;
+  /** always=全部走代理；fallback=直连失败才走代理（默认） */
+  proxy_mode?: 'always' | 'fallback';
+}
+
+const DEFAULT_CACHE_TIME = 3600;
+
+/** 代理地址校验：仅接受 http/https/socks5 协议 */
+export function normalizeProxyUrl(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (!['http:', 'https:', 'socks5:', 'socks5h:', 'socks4:'].includes(url.protocol)) return undefined;
+    if (!url.hostname) return undefined;
+    return trimmed;
+  } catch {
+    return undefined;
+  }
 }
 
 let cached: AppConfig | null = null;
 
+/** 读取 config.json；解析失败时退回空配置并打印明确错误，避免首个请求直接 500 */
 export function loadConfig(): AppConfig {
   if (cached) return cached;
   const configPath = getConfigPath();
-  cached = JSON.parse(readFileSync(configPath, 'utf-8')) as AppConfig;
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as Partial<AppConfig>;
+    const apiSite =
+      parsed?.api_site && typeof parsed.api_site === 'object' && !Array.isArray(parsed.api_site)
+        ? parsed.api_site
+        : {};
+    const cacheTime = Number(parsed?.cache_time);
+    const proxy = normalizeProxyUrl(parsed?.proxy);
+    const proxyMode = parsed?.proxy_mode === 'always' ? 'always' : 'fallback';
+    cached = {
+      cache_time: Number.isFinite(cacheTime) && cacheTime > 0 ? cacheTime : DEFAULT_CACHE_TIME,
+      api_site: apiSite,
+      ...(proxy ? { proxy, proxy_mode: proxyMode } : {}),
+    };
+  } catch (e) {
+    console.error(`[config] 无法读取 ${configPath}：${(e as Error).message}`);
+    cached = { cache_time: DEFAULT_CACHE_TIME, api_site: {} };
+  }
   return cached;
 }
 
@@ -42,7 +81,10 @@ export function invalidateConfigCache(): void {
 
 function persistConfig(config: AppConfig): void {
   const configPath = getConfigPath();
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  // 先写临时文件再 rename，避免断电/被杀进程后留下半截 JSON
+  const tmpPath = `${configPath}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  renameSync(tmpPath, configPath);
   invalidateConfigCache();
 }
 
@@ -109,4 +151,35 @@ export function removeVodSite(key: string): Array<{ key: string } & VodSiteConfi
   delete config.api_site[id];
   persistConfig(config);
   return listVodSources();
+}
+
+/** 读取当前代理设置 */
+export function getProxySettings(): { proxy?: string; proxy_mode: 'always' | 'fallback' } {
+  const config = loadConfig();
+  return {
+    ...(config.proxy ? { proxy: config.proxy } : {}),
+    proxy_mode: config.proxy_mode === 'always' ? 'always' : 'fallback',
+  };
+}
+
+/** 写入/清除代理设置；传 null 表示关闭代理 */
+export function setProxySettings(input: {
+  proxy?: string | null;
+  mode?: 'always' | 'fallback';
+}): { proxy?: string; proxy_mode: 'always' | 'fallback' } {
+  const config = loadConfig();
+  if (input.proxy === null || input.proxy === undefined || input.proxy === '') {
+    delete config.proxy;
+    delete config.proxy_mode;
+    persistConfig(config);
+    return getProxySettings();
+  }
+  const proxy = normalizeProxyUrl(input.proxy);
+  if (!proxy) {
+    throw new Error('代理地址无效，示例：http://127.0.0.1:7897 或 socks5://127.0.0.1:1080');
+  }
+  config.proxy = proxy;
+  config.proxy_mode = input.mode === 'always' ? 'always' : 'fallback';
+  persistConfig(config);
+  return getProxySettings();
 }

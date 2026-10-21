@@ -1,9 +1,13 @@
-/** 探测各资源站 API 连接延迟（毫秒），结果短 TTL 缓存 */
+/** 探测各资源站 API 连接延迟（毫秒），结果短 TTL 缓存并落盘复用 */
 
-import fetch from 'node-fetch';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { Readable } from 'node:stream';
+import fetch from 'node-fetch';
+import { getConfigPath } from '../paths.js';
 import { getVodSite, listVodSources } from '../config.js';
 import { agentFor } from './upstreamFetch.js';
+import { timeoutSignal } from './http.js';
 
 function discardBody(body: unknown): void {
   const stream = body as Readable | null;
@@ -12,9 +16,12 @@ function discardBody(body: unknown): void {
 
 const ARCHIVE_KEY = 'archive';
 const ARCHIVE_PROBE_URL = 'https://archive.org/';
-const PROBE_TIMEOUT_MS = 8_000;
+const PROBE_TIMEOUT_MS = 4_000;
 const CACHE_TTL_MS = 60_000;
-const PROBE_CONCURRENCY = 10;
+const PROBE_CONCURRENCY = 16;
+/** 落盘结果最多复用 30 分钟，避免启动即探测 50 个站 */
+const PERSISTED_MAX_AGE_MS = 30 * 60 * 1000;
+const LATENCY_CACHE_FILE = 'latency.json';
 
 const PROBE_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -28,6 +35,33 @@ export interface SourceLatencyResult {
 }
 
 let cached: SourceLatencyResult | null = null;
+let inflight: Promise<SourceLatencyResult> | null = null;
+
+function latencyCachePath(): string {
+  return path.join(path.dirname(getConfigPath()), LATENCY_CACHE_FILE);
+}
+
+function readPersisted(): SourceLatencyResult | null {
+  try {
+    const data = JSON.parse(readFileSync(latencyCachePath(), 'utf-8')) as SourceLatencyResult;
+    if (!data?.latencies || typeof data.measuredAt !== 'number') return null;
+    if (Date.now() - data.measuredAt > PERSISTED_MAX_AGE_MS) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function persist(result: SourceLatencyResult): void {
+  try {
+    const target = latencyCachePath();
+    const tmp = `${target}.tmp`;
+    writeFileSync(tmp, JSON.stringify(result), 'utf-8');
+    renameSync(tmp, target);
+  } catch {
+    /* 只读目录（如 Program Files）下静默跳过 */
+  }
+}
 
 function vodListProbeUrl(api: string): string {
   const sep = api.includes('?') ? '&' : '?';
@@ -52,8 +86,8 @@ async function probeUrl(url: string): Promise<number | null> {
         Referer: originFromUrl(url),
       },
       agent: agentFor(url),
-      timeout: PROBE_TIMEOUT_MS,
-    } as never);
+      signal: timeoutSignal(PROBE_TIMEOUT_MS),
+    });
     const ms = Date.now() - start;
     if (!res.ok) {
       discardBody(res.body);
@@ -97,12 +131,8 @@ async function runPool<T, R>(
   return results;
 }
 
-export async function measureAllSourceLatencies(): Promise<SourceLatencyResult> {
-  const now = Date.now();
-  if (cached && now - cached.measuredAt < CACHE_TTL_MS) {
-    return cached;
-  }
-
+async function measure(): Promise<SourceLatencyResult> {
+  const startedAt = Date.now();
   const vodKeys = listVodSources().map((s) => s.key);
   const latencies: Record<string, number | null> = {};
 
@@ -119,8 +149,30 @@ export async function measureAllSourceLatencies(): Promise<SourceLatencyResult> 
     latencies[key] = ms;
   }
 
-  cached = { latencies, measuredAt: now };
-  return cached;
+  const result: SourceLatencyResult = { latencies, measuredAt: startedAt };
+  cached = result;
+  persist(result);
+  return result;
+}
+
+export async function measureAllSourceLatencies(): Promise<SourceLatencyResult> {
+  const now = Date.now();
+  if (cached && now - cached.measuredAt < CACHE_TTL_MS) return cached;
+
+  if (!cached) {
+    const persisted = readPersisted();
+    if (persisted) {
+      cached = persisted;
+      return persisted;
+    }
+  }
+
+  // 多个组件同时请求时只探测一轮
+  if (inflight) return inflight;
+  inflight = measure().finally(() => {
+    inflight = null;
+  });
+  return inflight;
 }
 
 export function clearSourceLatencyCache(): void {

@@ -21,16 +21,24 @@ function resolvePort(explicit?: number): number {
   return 3002;
 }
 
-const DEFAULT_PORT = resolvePort();
+/**
+ * 监听地址：默认只绑回环。
+ * /api/stream、/api/img 是任意 URL 代理，不应暴露到局域网；确需局域网访问时显式设置 HOST=0.0.0.0。
+ */
+const LISTEN_HOST = process.env.HOST || '127.0.0.1';
+/** 请求日志默认关闭：打包版 stdout 管道无人消费，大量日志会阻塞事件循环 */
+const LOG_REQUESTS = process.env.LOG_REQUESTS === '1';
 
 export function createApp() {
   const app = express();
   const frontendDist = getFrontendDistPath();
 
-  app.use((req, _res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    next();
-  });
+  if (LOG_REQUESTS) {
+    app.use((req, _res, next) => {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+      next();
+    });
+  }
 
   app.use(express.json({ limit: '64kb' }));
 
@@ -40,7 +48,12 @@ export function createApp() {
   app.use('/api/movies', moviesRouter);
   app.get('/api/health', (_req, res) => res.json({ ok: true, time: Date.now() }));
 
-  app.use(express.static(frontendDist));
+  // 文件名带 hash，可放心 immutable；index.html 仍走 1 小时
+  app.use(
+    '/assets',
+    express.static(path.join(frontendDist, 'assets'), { immutable: true, maxAge: '1y' }),
+  );
+  app.use(express.static(frontendDist, { maxAge: '1h', index: false }));
   app.get(/^\/(?!api).*/, (req, res, next) => {
     if (req.method !== 'GET') return next();
     res.sendFile(path.join(frontendDist, 'index.html'), (err) => {
@@ -56,11 +69,12 @@ export function startServer(port?: number): Promise<{ server: Server; port: numb
   const listenPort = resolvePort(port);
   const app = createApp();
   return new Promise((resolve, reject) => {
-    const server = app.listen(listenPort, () => {
+    const server = app.listen({ port: listenPort, host: LISTEN_HOST }, () => {
       const addr = server.address();
       const actualPort = typeof addr === 'object' && addr ? addr.port : listenPort;
+      const shownHost = LISTEN_HOST === '0.0.0.0' || LISTEN_HOST === '::' ? 'localhost' : LISTEN_HOST;
       console.log(`\n  🎬 Public Domain Cinema 已启动`);
-      console.log(`  → http://localhost:${actualPort}\n`);
+      console.log(`  → http://${shownHost}:${actualPort}\n`);
       resolve({ server, port: actualPort });
     });
     server.on('error', reject);
