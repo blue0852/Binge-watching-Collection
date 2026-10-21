@@ -1,8 +1,14 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import type { CSSProperties } from 'react';
 import Hls from 'hls.js';
 import type { HlsConfig } from 'hls.js';
 import Pagination from './Pagination.js';
-import { getHistoryEntry, upsertPlayHistory, type PlayHistoryEntry } from '../utils/playHistory.js';
+import {
+  formatClock,
+  getHistoryEntry,
+  upsertPlayHistory,
+  type PlayHistoryEntry,
+} from '../utils/playHistory.js';
 import { getPlayerSettings, savePlayerSettings } from '../utils/playerSettings.js';
 import { proxyStreamUrl } from '../utils/streamUrl.js';
 import type { PlayableFile } from '../types.js';
@@ -674,6 +680,14 @@ export default function VideoPlayer({
   const epStart = (epPage - 1) * EPISODES_PER_PAGE;
   const visibleEpisodes = lineFiles.slice(epStart, epStart + EPISODES_PER_PAGE);
 
+  // 小窗自建控制条：360px 宽时原生控件太挤、进度条常常不出来，这里单独做一条
+  const progressMax = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const progressValue = progressMax > 0 ? Math.min(playbackTime, progressMax) : 0;
+  const progressPercent = progressMax > 0 ? (progressValue / progressMax) * 100 : 0;
+  const miniBarStyle = { '--progress': `${progressPercent}%` } as CSSProperties;
+  const hasPrevEpisode = currentIndex > 0;
+  const hasNextEpisode = currentIndex >= 0 && currentIndex < lineFiles.length - 1;
+
   return (
     <div className={compact ? 'player player-compact' : 'player'}>
       <div className="player-video">
@@ -698,12 +712,15 @@ export default function VideoPlayer({
             >
               <video
                 ref={videoRef}
-                controls
+                controls={!compact}
                 controlsList="nofullscreen"
                 autoPlay
                 playsInline
                 poster={poster}
                 preload="auto"
+                onClick={() => {
+                  if (compact) togglePlayPause();
+                }}
                 onMouseMove={revealControls}
                 onError={() => setError(true)}
                 onEnded={onVideoEnded}
@@ -749,6 +766,63 @@ export default function VideoPlayer({
               >
                 您的浏览器不支持 HTML5 视频播放。
               </video>
+
+              {compact && (
+                <div
+                  className="player-mini-bar"
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="range"
+                    className="player-mini-progress"
+                    style={miniBarStyle}
+                    min={0}
+                    max={progressMax || 0}
+                    step={0.5}
+                    value={progressValue}
+                    disabled={progressMax <= 0}
+                    onChange={(e) => applySeek(Number(e.target.value))}
+                    title="拖动调整播放进度"
+                    aria-label="播放进度"
+                  />
+                  <div className="player-mini-row">
+                    <button
+                      type="button"
+                      className="player-mini-btn"
+                      disabled={!hasPrevEpisode}
+                      onClick={playPrevEpisode}
+                      title="上一集"
+                      aria-label="上一集"
+                    >
+                      <IconPrev />
+                    </button>
+                    <button
+                      type="button"
+                      className="player-mini-btn player-mini-btn-main"
+                      onClick={togglePlayPause}
+                      title={isPlaying ? '暂停' : '播放'}
+                      aria-label={isPlaying ? '暂停' : '播放'}
+                    >
+                      {isPlaying ? <IconPause /> : <IconPlay />}
+                    </button>
+                    <button
+                      type="button"
+                      className="player-mini-btn"
+                      disabled={!hasNextEpisode}
+                      onClick={playNextEpisode}
+                      title="下一集"
+                      aria-label="下一集"
+                    >
+                      <IconNext />
+                    </button>
+                    <span className="player-mini-time">
+                      {formatClock(progressValue) || '0:00'}
+                      {progressMax > 0 ? ` / ${formatClock(progressMax)}` : ''}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               <div className="player-overlay-controls">
                 {showSkipIntro && (

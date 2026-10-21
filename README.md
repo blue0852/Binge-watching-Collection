@@ -70,8 +70,8 @@ npm run pack:portable
 
 | 文件 | 说明 |
 |------|------|
-| `Public Domain Cinema-1.0.7-portable.exe` | 绿色便携版，双击即用 |
-| `Public Domain Cinema-1.0.7-setup.exe` | 安装版 |
+| `Public Domain Cinema-1.0.8-portable.exe` | 绿色便携版，双击即用 |
+| `Public Domain Cinema-1.0.8-setup.exe` | 安装版 |
 
 仅生成未压缩目录（调试打包用）：`npm run pack:dir`
 

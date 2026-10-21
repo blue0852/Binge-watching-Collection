@@ -1002,9 +1002,120 @@ img {
 .player-float-bar button:hover {
   background: rgba(255, 255, 255, 0.26);
 }
-/* 小窗空间有限：隐藏自定义中心控件，用原生控件就够了 */
+/* 小窗空间有限：隐藏自定义中心控件，改用下方的紧凑控制条 */
 .player-float.is-mini .player-center-bar {
   display: none;
+}
+
+/* ===== 小窗紧凑控制条：进度条 + 上下集 + 播放暂停 ===== */
+.player-mini-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 16px 8px 5px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.86), rgba(0, 0, 0, 0));
+}
+.player-mini-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+.player-mini-progress::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--progress, 0%),
+    rgba(255, 255, 255, 0.3) var(--progress, 0%),
+    rgba(255, 255, 255, 0.3) 100%
+  );
+}
+.player-mini-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+.player-mini-progress::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+}
+.player-mini-progress::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.player-mini-progress::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+.player-mini-progress:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.player-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.player-mini-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, opacity 0.15s;
+}
+.player-mini-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.player-mini-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+.player-mini-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.player-mini-btn-main {
+  width: 32px;
+}
+.player-mini-time {
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.82);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .player-icon-btn.is-active {
   color: var(--accent);
