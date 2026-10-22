@@ -9,6 +9,7 @@ import {
   upsertPlayHistory,
   type PlayHistoryEntry,
 } from '../utils/playHistory.js';
+import { getPipBridge, savePipSession } from '../pip/pip.js';
 import { getPlayerSettings, savePlayerSettings } from '../utils/playerSettings.js';
 import { proxyStreamUrl } from '../utils/streamUrl.js';
 import type { PlayableFile } from '../types.js';
@@ -116,6 +117,36 @@ function IconPictureInPicture() {
   );
 }
 
+function IconVolume() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4z" />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"
+      />
+    </svg>
+  );
+}
+
+function IconVolumeMute() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4z" />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        d="M16 9.5l5 5M21 9.5l-5 5"
+      />
+    </svg>
+  );
+}
+
 function getFullscreenElement(): Element | null {
   const doc = document as Document & {
     webkitFullscreenElement?: Element | null;
@@ -123,10 +154,48 @@ function getFullscreenElement(): Element | null {
   return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
 }
 
+/** 音量 / 倍速偏好，跨影片复用 */
+const VOLUME_KEY = 'pdc.player.volume.v1';
+const MUTED_KEY = 'pdc.player.muted.v1';
+const RATE_KEY = 'pdc.player.rate.v1';
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    return raw === '1';
+  } catch {
+    return fallback;
+  }
+}
+
+function storeValue(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
+
 /** 视为「从头播放」的最大时间（秒），在此范围内自动跳过片头 */
 const AUTO_INTRO_MAX_START_SECONDS = 3;
 /** 与浏览器原生控件接近的自动隐藏延迟 */
 const CONTROLS_HIDE_DELAY_MS = 2500;
+
+/** 全局只允许一个播放器实例接管键盘，避免 StrictMode/热更新重复挂监听导致一次按键快进多次 */
+let activeKeyHandler: ((event: KeyboardEvent) => void) | null = null;
 
 export interface PlayHistoryMeta {
   id: string;
@@ -142,11 +211,17 @@ interface Props {
   title: string;
   sourceLabel?: string;
   historyMeta?: PlayHistoryMeta;
-  /** 小窗模式：只保留画面与原生控件，隐藏选集/线路/设置 */
+  /** 小窗模式：只保留画面与紧凑控制条，隐藏选集/线路/设置 */
   compact?: boolean;
   /** 点击「小窗」按钮时由外部接管（收进右下角悬浮窗） */
   onEnterMini?: () => void;
+  /** 当前实例运行在系统置顶画中画窗口（Document PiP）里 */
+  pipMode?: boolean;
+  /** 画中画窗口关闭后通知外部（用于重新挂载主播放器、同步进度） */
+  onPipClosed?: () => void;
 }
+
+/** 桌面端置顶画中画窗口是否需要重新渲染主播放器时由外部处理 */
 
 function lineKey(f: PlayableFile): string {
   const i = f.name.indexOf(' · ');
@@ -176,6 +251,8 @@ export default function VideoPlayer({
   historyMeta,
   compact = false,
   onEnterMini,
+  pipMode = false,
+  onPipClosed,
 }: Props) {
   // 线路分组先算好，才能把「上次看的线路 + 那一集」直接作为初始状态
   const lineGroups = useMemo(() => {
@@ -234,9 +311,20 @@ export default function VideoPlayer({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pipActive, setPipActive] = useState(false);
+  const [pipTip, setPipTip] = useState<string | null>(null);
+  const pipTipTimerRef = useRef<number | null>(null);
   const [pipSupported] = useState(
-    () => typeof document !== 'undefined' && Boolean(document.pictureInPictureEnabled),
+    () =>
+      typeof document !== 'undefined' &&
+      (Boolean(getPipBridge()) || Boolean(document.pictureInPictureEnabled)),
   );
+  const [buffered, setBuffered] = useState(0);
+  const [buffering, setBuffering] = useState(false);
+  const [volume, setVolume] = useState(() => readStoredNumber(VOLUME_KEY, 1));
+  const [muted, setMuted] = useState(() => readStoredBool(MUTED_KEY, false));
+  const [rate, setRate] = useState(() => readStoredNumber(RATE_KEY, 1));
+  const [rateMenuOpen, setRateMenuOpen] = useState(false);
+  const [volumeHover, setVolumeHover] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -447,35 +535,6 @@ export default function VideoPlayer({
     };
   }, []);
 
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      const target = e.target;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        (target instanceof HTMLElement && target.isContentEditable)
-      ) {
-        return;
-      }
-      const video = videoRef.current;
-      if (!video || error) return;
-
-      e.preventDefault();
-      const delta = e.key === 'ArrowLeft' ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS;
-      let next = video.currentTime + delta;
-      if (Number.isFinite(video.duration)) {
-        next = Math.max(0, Math.min(video.duration, next));
-      } else {
-        next = Math.max(0, next);
-      }
-      video.currentTime = next;
-    }
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [error]);
-
   const currentIndex = useMemo(() => {
     if (!current) return -1;
     return lineFiles.findIndex((f) => f.url === current.url);
@@ -501,9 +560,12 @@ export default function VideoPlayer({
     }
   }, [currentIndex, lineFiles.length, goToEpisodeIndex]);
 
+  // 鼠标停在控制条上时不要自动收起，否则拖到一半就消失
+  const miniBarHoverRef = useRef(false);
   const scheduleHideControls = useCallback(() => {
     if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
     hideControlsTimerRef.current = window.setTimeout(() => {
+      if (miniBarHoverRef.current) return;
       const video = videoRef.current;
       if (video && !video.paused) setControlsVisible(false);
     }, CONTROLS_HIDE_DELAY_MS);
@@ -515,17 +577,35 @@ export default function VideoPlayer({
   }, [scheduleHideControls]);
 
   useEffect(() => {
-    if (!isPlaying) {
+    if (!isPlaying || pipMode) {
       setControlsVisible(true);
       if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
       return;
     }
     scheduleHideControls();
-  }, [isPlaying, scheduleHideControls]);
+  }, [isPlaying, pipMode, scheduleHideControls]);
+
+  // 画中画期间主窗口必须保持静音暂停：任何来源把页面视频重新拉起来都立刻压回去
+  useEffect(() => {
+    if (!pipActive || pipMode) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const keepPaused = () => {
+      if (!video.paused) video.pause();
+    };
+    keepPaused();
+    video.addEventListener('play', keepPaused);
+    video.addEventListener('playing', keepPaused);
+    return () => {
+      video.removeEventListener('play', keepPaused);
+      video.removeEventListener('playing', keepPaused);
+    };
+  }, [pipActive, pipMode]);
 
   useEffect(
     () => () => {
       if (hideControlsTimerRef.current) window.clearTimeout(hideControlsTimerRef.current);
+      if (pipTipTimerRef.current) window.clearTimeout(pipTipTimerRef.current);
     },
     [],
   );
@@ -556,16 +636,90 @@ export default function VideoPlayer({
     };
   }, [current]);
 
+  const showPipTip = useCallback((message: string) => {
+    setPipTip(message);
+    if (pipTipTimerRef.current) window.clearTimeout(pipTipTimerRef.current);
+    pipTipTimerRef.current = window.setTimeout(() => setPipTip(null), 3200);
+  }, []);
+
+  /**
+   * 桌面端画中画：主进程开一个无边框置顶窗口，窗口里是同一个播放器组件，
+   * 所以进度条、上一集/下一集都能保留（原生 video PiP 的控件无法自定义）。
+   */
+  const openDesktopPip = useCallback(async (): Promise<boolean> => {
+    const bridge = getPipBridge();
+    if (!bridge || pipMode) return false;
+    try {
+      // 先落盘当前进度，置顶小窗会按播放历史接上同一集、同一位置
+      persistHistory(true);
+      savePipSession({ files, poster, title, sourceLabel, historyMeta });
+      videoRef.current?.pause();
+      await bridge.open();
+      // 窗口加载期间可能被自动播放/缓冲回调重新拉起来，这里再压一次
+      videoRef.current?.pause();
+      setPipActive(true);
+      return true;
+    } catch {
+      showPipTip('无法开启画中画窗口');
+      return true;
+    }
+  }, [
+    pipMode,
+    files,
+    poster,
+    title,
+    sourceLabel,
+    historyMeta,
+    persistHistory,
+    showPipTip,
+  ]);
+
   const togglePictureInPicture = useCallback(() => {
-    const video = videoRef.current;
-    if (!video || !document.pictureInPictureEnabled) return;
     revealControls();
+    const bridge = getPipBridge();
+    if (pipMode || pipActive) {
+      if (bridge) void bridge.close();
+      return;
+    }
+    if (bridge) {
+      void openDesktopPip();
+      return;
+    }
+
+    // 浏览器环境：回退到原生画中画（控件由系统提供）
+    const video = videoRef.current;
+    if (!video) return;
+    if (!document.pictureInPictureEnabled) {
+      showPipTip('当前环境不支持画中画');
+      return;
+    }
     if (document.pictureInPictureElement) {
       void document.exitPictureInPicture().catch(() => {});
       return;
     }
-    void video.requestPictureInPicture().catch(() => {});
-  }, [revealControls]);
+    if (!video.videoWidth) {
+      showPipTip('视频还没加载出来，稍后再试');
+      return;
+    }
+    video.requestPictureInPicture().catch((err: unknown) => {
+      const name = err instanceof DOMException ? err.name : '';
+      showPipTip(
+        name === 'NotAllowedError'
+          ? '系统不允许：请保持主窗口可见（最小化时无法开画中画）'
+          : '无法开启画中画，请稍后重试',
+      );
+    });
+  }, [pipMode, pipActive, openDesktopPip, revealControls, showPipTip]);
+
+  // 置顶小窗关闭后：恢复按钮状态，并让外部重挂主播放器以接上小窗里的最新进度
+  useEffect(() => {
+    const bridge = getPipBridge();
+    if (!bridge || pipMode) return;
+    return bridge.onClosed(() => {
+      setPipActive(false);
+      onPipClosed?.();
+    });
+  }, [pipMode, onPipClosed]);
 
   const toggleFullscreen = useCallback(() => {
     const container = playerContainerRef.current;
@@ -594,6 +748,129 @@ export default function VideoPlayer({
     if (video.paused) void video.play().catch(() => {});
     else video.pause();
   }, [error, revealControls]);
+
+  const changeVolume = useCallback((next: number) => {
+    const clamped = Math.min(1, Math.max(0, Number(next.toFixed(2))));
+    setVolume(clamped);
+    setMuted(clamped === 0);
+    const video = videoRef.current;
+    if (video) {
+      video.volume = clamped;
+      video.muted = clamped === 0;
+    }
+    revealControls();
+  }, [revealControls]);
+
+  const toggleMute = useCallback(() => {
+    setMuted((prev) => {
+      const next = !prev;
+      const video = videoRef.current;
+      if (video) video.muted = next;
+      return next;
+    });
+    revealControls();
+  }, [revealControls]);
+
+  const changeRate = useCallback((next: number) => {
+    setRate(next);
+    setRateMenuOpen(false);
+    const video = videoRef.current;
+    if (video) video.playbackRate = next;
+    revealControls();
+  }, [revealControls]);
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const total = Number.isFinite(video.duration) ? video.duration : duration;
+      if (!total) return;
+      video.currentTime = Math.min(Math.max(0, video.currentTime + delta), Math.max(0, total - 0.3));
+      revealControls();
+    },
+    [duration, revealControls],
+  );
+
+  // 音量 / 倍速偏好：应用当前值，并在切集后重新套用（video 元素复用时属性不会丢，但要防止被重置）
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = volume;
+    video.muted = muted;
+    video.playbackRate = rate;
+  }, [volume, muted, rate, current]);
+
+  useEffect(() => {
+    storeValue(VOLUME_KEY, String(volume));
+  }, [volume]);
+  useEffect(() => {
+    storeValue(MUTED_KEY, muted ? '1' : '0');
+  }, [muted]);
+  useEffect(() => {
+    storeValue(RATE_KEY, String(rate));
+  }, [rate]);
+
+  // 键盘快捷键：空格/K 播放暂停、←→ 快退快进、↑↓ 音量、M 静音、F 全屏、N/P 切集
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === ' ' || key === 'k') {
+        event.preventDefault();
+        togglePlayPause();
+      } else if (key === 'arrowleft') {
+        event.preventDefault();
+        seekBy(event.shiftKey ? -30 : -SEEK_STEP_SECONDS);
+      } else if (key === 'arrowright') {
+        event.preventDefault();
+        seekBy(event.shiftKey ? 30 : SEEK_STEP_SECONDS);
+      } else if (key === 'arrowup') {
+        event.preventDefault();
+        changeVolume(volume + 0.05);
+      } else if (key === 'arrowdown') {
+        event.preventDefault();
+        changeVolume(volume - 0.05);
+      } else if (key === 'm') {
+        toggleMute();
+      } else if (key === 'f') {
+        toggleFullscreen();
+      } else if (key === 'n') {
+        if (currentIndex >= 0 && currentIndex < lineFiles.length - 1) playNextEpisode();
+      } else if (key === 'p') {
+        if (currentIndex > 0) playPrevEpisode();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    if (activeKeyHandler && activeKeyHandler !== onKeyDown) {
+      document.removeEventListener('keydown', activeKeyHandler);
+    }
+    activeKeyHandler = onKeyDown;
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      if (activeKeyHandler === onKeyDown) activeKeyHandler = null;
+    };
+  }, [
+    togglePlayPause,
+    seekBy,
+    changeVolume,
+    toggleMute,
+    toggleFullscreen,
+    volume,
+    currentIndex,
+    lineFiles.length,
+    playNextEpisode,
+    playPrevEpisode,
+  ]);
 
   const skipIntro = useCallback(() => {
     if (playerSettings.introSkipSeconds <= 0) return;
@@ -684,12 +961,14 @@ export default function VideoPlayer({
   const progressMax = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const progressValue = progressMax > 0 ? Math.min(playbackTime, progressMax) : 0;
   const progressPercent = progressMax > 0 ? (progressValue / progressMax) * 100 : 0;
+  const bufferedPercent =
+    progressMax > 0 && buffered > 0 ? Math.min(100, (buffered / progressMax) * 100) : 0;
   const miniBarStyle = { '--progress': `${progressPercent}%` } as CSSProperties;
   const hasPrevEpisode = currentIndex > 0;
   const hasNextEpisode = currentIndex >= 0 && currentIndex < lineFiles.length - 1;
 
   return (
-    <div className={compact ? 'player player-compact' : 'player'}>
+    <div className={`${compact ? 'player player-compact' : 'player'}${pipMode ? ' player-pip-mode' : ''}`}>
       <div className="player-video">
         {error ? (
           <div className="player-error">
@@ -712,17 +991,25 @@ export default function VideoPlayer({
             >
               <video
                 ref={videoRef}
-                controls={!compact}
-                controlsList="nofullscreen"
+                controls={false}
                 autoPlay
                 playsInline
                 poster={poster}
                 preload="auto"
                 onClick={() => {
                   if (compact) togglePlayPause();
+                  else revealControls();
+                }}
+                onDoubleClick={() => {
+                  if (!compact) toggleFullscreen();
                 }}
                 onMouseMove={revealControls}
                 onError={() => setError(true)}
+                onWaiting={() => setBuffering(true)}
+                onStalled={() => setBuffering(true)}
+                onSeeking={() => setBuffering(true)}
+                onSeeked={() => setBuffering(false)}
+                onCanPlay={() => setBuffering(false)}
                 onEnded={onVideoEnded}
                 onLoadedMetadata={(e) => {
                   restoreHistoryPosition();
@@ -732,12 +1019,20 @@ export default function VideoPlayer({
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => {
                   setIsPlaying(false);
+                  setBuffering(false);
                   persistHistory(true);
                 }}
                 onPlaying={() => {
                   setIsPlaying(true);
+                  setBuffering(false);
                   tryAutoSkipIntro();
                   persistHistory(true);
+                }}
+                onProgress={(e) => {
+                  const v = e.currentTarget;
+                  if (v.buffered.length > 0) {
+                    setBuffered(v.buffered.end(v.buffered.length - 1));
+                  }
                 }}
                 onTimeUpdate={(e) => {
                   const v = e.currentTarget;
@@ -769,9 +1064,24 @@ export default function VideoPlayer({
 
               {compact && (
                 <div
-                  className="player-mini-bar"
+                  className={`player-mini-bar${controlsVisible || pipMode ? ' visible' : ''}`}
                   onClick={(e) => e.stopPropagation()}
-                  onPointerDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    revealControls();
+                  }}
+                  onMouseMove={(e) => {
+                    e.stopPropagation();
+                    revealControls();
+                  }}
+                  onMouseEnter={() => {
+                    miniBarHoverRef.current = true;
+                    revealControls();
+                  }}
+                  onMouseLeave={() => {
+                    miniBarHoverRef.current = false;
+                    if (isPlaying) scheduleHideControls();
+                  }}
                 >
                   <input
                     type="range"
@@ -816,6 +1126,17 @@ export default function VideoPlayer({
                     >
                       <IconNext />
                     </button>
+                    {pipSupported && (
+                      <button
+                        type="button"
+                        className={`player-mini-btn${pipActive || pipMode ? ' is-active' : ''}`}
+                        onClick={togglePictureInPicture}
+                        title={pipActive || pipMode ? '退出画中画' : '画中画（浮在其他窗口之上）'}
+                        aria-label={pipActive || pipMode ? '退出画中画' : '画中画'}
+                      >
+                        <IconPictureInPicture />
+                      </button>
+                    )}
                     <span className="player-mini-time">
                       {formatClock(progressValue) || '0:00'}
                       {progressMax > 0 ? ` / ${formatClock(progressMax)}` : ''}
@@ -825,6 +1146,12 @@ export default function VideoPlayer({
               )}
 
               <div className="player-overlay-controls">
+                {pipTip && <div className="player-pip-tip">{pipTip}</div>}
+                {buffering && !error && (
+                  <div className="player-buffering" aria-hidden="true">
+                    <span className="player-spinner" />
+                  </div>
+                )}
                 {showSkipIntro && (
                   <button type="button" className="player-skip-btn" onClick={skipIntro}>
                     跳过片头
@@ -836,75 +1163,183 @@ export default function VideoPlayer({
                   </button>
                 )}
 
-                <div
-                  className={`player-center-bar${controlsVisible ? ' visible' : ''}`}
-                  onClick={(e) => e.stopPropagation()}
-                  onMouseMove={(e) => {
-                    e.stopPropagation();
-                    revealControls();
-                  }}
-                >
+                {!compact && !isPlaying && !buffering && (
                   <button
                     type="button"
-                    className="player-icon-btn"
-                    disabled={currentIndex <= 0}
-                    onClick={playPrevEpisode}
-                    title="上一集"
-                    aria-label="上一集"
-                  >
-                    <IconPrev />
-                  </button>
-                  <button
-                    type="button"
-                    className="player-icon-btn player-icon-btn-main"
+                    className="player-big-play"
                     onClick={togglePlayPause}
-                    title={isPlaying ? '暂停' : '播放'}
-                    aria-label={isPlaying ? '暂停' : '播放'}
+                    title="播放"
+                    aria-label="播放"
                   >
-                    {isPlaying ? <IconPause /> : <IconPlay />}
+                    <IconPlay />
                   </button>
-                  <button
-                    type="button"
-                    className="player-icon-btn"
-                    disabled={currentIndex < 0 || currentIndex >= lineFiles.length - 1}
-                    onClick={playNextEpisode}
-                    title="下一集"
-                    aria-label="下一集"
+                )}
+
+                {!compact && (
+                  <div
+                    className={`player-controls${controlsVisible || !isPlaying ? ' visible' : ''}`}
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseEnter={() => {
+                      miniBarHoverRef.current = true;
+                      revealControls();
+                    }}
+                    onMouseLeave={() => {
+                      miniBarHoverRef.current = false;
+                      if (isPlaying) scheduleHideControls();
+                    }}
+                    onMouseMove={(e) => {
+                      e.stopPropagation();
+                      revealControls();
+                    }}
                   >
-                    <IconNext />
-                  </button>
-                  {onEnterMini && (
-                    <button
-                      type="button"
-                      className="player-icon-btn"
-                      onClick={onEnterMini}
-                      title="小窗播放（切页面也能继续看）"
-                      aria-label="小窗播放"
-                    >
-                      <IconMiniWindow />
-                    </button>
-                  )}
-                  {pipSupported && (
-                    <button
-                      type="button"
-                      className={`player-icon-btn${pipActive ? ' is-active' : ''}`}
-                      onClick={togglePictureInPicture}
-                      title={pipActive ? '退出画中画' : '画中画（浮在其他窗口之上）'}
-                      aria-label={pipActive ? '退出画中画' : '画中画'}
-                    >
-                      <IconPictureInPicture />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="player-icon-btn player-icon-btn-fs"
-                    onClick={toggleFullscreen}
-                    title={isFullscreen ? '退出全屏' : '全屏'}
-                    aria-label={isFullscreen ? '退出全屏' : '全屏'}
-                  >
-                    {isFullscreen ? <IconFullscreenExit /> : <IconFullscreenEnter />}
-                  </button>
-                </div>
+                    <div className="pc-progress-row">
+                      <input
+                        type="range"
+                        className="pc-progress"
+                        style={
+                          {
+                            '--progress': `${progressPercent}%`,
+                            '--buffered': `${bufferedPercent}%`,
+                          } as CSSProperties
+                        }
+                        min={0}
+                        max={progressMax || 0}
+                        step={0.5}
+                        value={progressValue}
+                        disabled={progressMax <= 0}
+                        onChange={(e) => applySeek(Number(e.target.value))}
+                        title="拖动调整播放进度"
+                        aria-label="播放进度"
+                      />
+                    </div>
+                    <div className="pc-row">
+                      <button
+                        type="button"
+                        className="pc-btn pc-btn-main"
+                        onClick={togglePlayPause}
+                        title={isPlaying ? '暂停（空格）' : '播放（空格）'}
+                        aria-label={isPlaying ? '暂停' : '播放'}
+                      >
+                        {isPlaying ? <IconPause /> : <IconPlay />}
+                      </button>
+                      <button
+                        type="button"
+                        className="pc-btn"
+                        disabled={!hasPrevEpisode}
+                        onClick={playPrevEpisode}
+                        title="上一集（P）"
+                        aria-label="上一集"
+                      >
+                        <IconPrev />
+                      </button>
+                      <button
+                        type="button"
+                        className="pc-btn"
+                        disabled={!hasNextEpisode}
+                        onClick={playNextEpisode}
+                        title="下一集（N）"
+                        aria-label="下一集"
+                      >
+                        <IconNext />
+                      </button>
+                      <span className="pc-time">
+                        {formatClock(progressValue) || '0:00'}
+                        <span className="pc-time-sep">/</span>
+                        {progressMax > 0 ? formatClock(progressMax) : '--:--'}
+                      </span>
+
+                      <span className="pc-spacer" />
+
+                      <div className="pc-rate">
+                        <button
+                          type="button"
+                          className={`pc-btn pc-rate-btn${rate !== 1 ? ' is-active' : ''}`}
+                          onClick={() => setRateMenuOpen((open) => !open)}
+                          title="播放速度"
+                          aria-label="播放速度"
+                        >
+                          {rate}x
+                        </button>
+                        {rateMenuOpen && (
+                          <div className="pc-menu">
+                            {PLAYBACK_RATES.map((value) => (
+                              <button
+                                key={value}
+                                type="button"
+                                className={`pc-menu-item${value === rate ? ' active' : ''}`}
+                                onClick={() => changeRate(value)}
+                              >
+                                {value}x
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div
+                        className="pc-volume"
+                        onMouseEnter={() => setVolumeHover(true)}
+                        onMouseLeave={() => setVolumeHover(false)}
+                      >
+                        <button
+                          type="button"
+                          className="pc-btn"
+                          onClick={toggleMute}
+                          title={muted ? '取消静音（M）' : '静音（M）'}
+                          aria-label={muted ? '取消静音' : '静音'}
+                        >
+                          {muted || volume === 0 ? <IconVolumeMute /> : <IconVolume />}
+                        </button>
+                        {volumeHover && (
+                          <div className="pc-volume-pop">
+                            <input
+                              type="range"
+                              className="pc-volume-slider"
+                              min={0}
+                              max={1}
+                              step={0.02}
+                              value={muted ? 0 : volume}
+                              onChange={(e) => changeVolume(Number(e.target.value))}
+                              aria-label="音量"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {onEnterMini && (
+                        <button
+                          type="button"
+                          className="pc-btn"
+                          onClick={onEnterMini}
+                          title="小窗播放（切页面也能继续看）"
+                          aria-label="小窗播放"
+                        >
+                          <IconMiniWindow />
+                        </button>
+                      )}
+                      {pipSupported && (
+                        <button
+                          type="button"
+                          className={`pc-btn${pipActive ? ' is-active' : ''}`}
+                          onClick={togglePictureInPicture}
+                          title={pipActive ? '退出画中画' : '画中画（浮在其他窗口之上）'}
+                          aria-label={pipActive ? '退出画中画' : '画中画'}
+                        >
+                          <IconPictureInPicture />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="pc-btn"
+                        onClick={toggleFullscreen}
+                        title={isFullscreen ? '退出全屏（Esc）' : '全屏（F）'}
+                        aria-label={isFullscreen ? '退出全屏' : '全屏'}
+                      >
+                        {isFullscreen ? <IconFullscreenExit /> : <IconFullscreenEnter />}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )

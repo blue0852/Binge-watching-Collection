@@ -70,10 +70,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<PlayerMode>('inline');
   const [slotEl, setSlotEl] = useState<HTMLElement | null>(null);
   const [miniPos, setMiniPos] = useState<{ left: number; top: number } | null>(null);
+  // 画中画窗口关闭后递增，强制重挂播放器以接上画中画里的最新进度/集数
+  const [pipEpoch, setPipEpoch] = useState(0);
   const floatRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   const sessionRef = useRef<PlayerSession | null>(null);
   sessionRef.current = session;
+  const closeRef = useRef<() => void>(() => {});
 
   const open = useCallback((next: PlayerSession) => {
     // 同一部影片再次进入详情页：保留当前播放进度，只重新停靠
@@ -111,13 +114,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setMode('inline');
     setMiniPos(null);
   }, []);
+  closeRef.current = close;
 
-  // 详情页卸载（换了页面）且停靠位消失 → 自动转小窗，播放不中断
+  // 详情页卸载（换了页面）且停靠位消失 → 直接停止播放并收起播放器，
+  // 不再自动弹出右下角小窗；小窗只能通过播放器上的「小窗」按钮显式进入。
+  // 留 350ms 缓冲：详情页间跳转时停靠位会短暂消失，避免误关。
   useEffect(() => {
     if (!session || mode !== 'inline' || slotEl) return;
     const timer = window.setTimeout(() => {
-      setMode((prev) => (prev === 'inline' ? 'mini' : prev));
-      setMiniPos(null);
+      closeRef.current();
     }, AUTO_MINI_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [session, mode, slotEl]);
@@ -236,7 +241,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           )}
           <Suspense fallback={<div className="player-float-loading" />}>
             <VideoPlayer
-              key={session.key}
+              key={`${session.key}:${pipEpoch}`}
               files={session.files}
               poster={session.poster}
               title={session.title}
@@ -244,6 +249,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               historyMeta={session.historyMeta}
               compact={mode === 'mini'}
               onEnterMini={enterMini}
+              onPipClosed={() => setPipEpoch((n) => n + 1)}
             />
           </Suspense>
         </div>

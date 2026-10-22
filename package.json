@@ -1,6 +1,6 @@
 {
   "name": "public-domain-cinema",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "private": true,
   "description": "聚合 Internet Archive 公有领域影视资源的合法播放站",
   "main": "desktop/main.mjs",
@@ -18,7 +18,8 @@
     "prepare:pack": "node scripts/prepare-pack.mjs",
     "pack:win": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win",
     "pack:portable": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win portable",
-    "pack:dir": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win dir"
+    "pack:dir": "npm run icon && npm run build && npm run prepare:pack && electron-builder --win dir",
+    "dev:desktop": "node scripts/dev-desktop.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

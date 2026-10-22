@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron';
 import { fork } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -7,6 +7,9 @@ import http from 'node:http';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isPackaged = app.isPackaged;
+/** 开发模式：dev 脚本传入 Vite 地址，主窗口与画中画窗口都加载它（热更新可用） */
+const devServerUrl =
+  !isPackaged && process.env.PDC_DEV_URL ? process.env.PDC_DEV_URL.replace(/\/+$/, '') : '';
 const appRoot = isPackaged
   ? path.join(process.resourcesPath, 'app')
   : path.resolve(__dirname, '..');
@@ -16,6 +19,7 @@ if (isPackaged && process.env.PORTABLE_EXECUTABLE_DIR) {
 }
 
 let mainWindow = null;
+let pipWindow = null;
 let serverProcess = null;
 let serverPort = 3002;
 
@@ -72,10 +76,14 @@ function resolveConfigPath() {
 }
 
 function waitForHealth(port, retries = 40) {
+  return waitForHealthUrl(`http://127.0.0.1:${port}/api/health`, retries);
+}
+
+function waitForHealthUrl(url, retries = 40) {
   return new Promise((resolve, reject) => {
     let left = retries;
     const tick = () => {
-      const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
+      const req = http.get(url, (res) => {
         res.resume();
         if (res.statusCode === 200) resolve();
         else retry();
@@ -165,6 +173,11 @@ function stopBackendProcessOnly() {
 
 /** 桌面版复用同一 localhost 端口，否则 localStorage（播放历史等）会因 origin 变化而读不到 */
 async function startBackend() {
+  if (devServerUrl) {
+    // 开发模式：后端由 dev 脚本（tsx watch）单独启动，这里只等它就绪
+    await waitForHealthUrl(`${devServerUrl}/api/health`, 60);
+    return;
+  }
   const savedPort = readSavedServerPort();
   const attempts = savedPort != null ? [savedPort, 0] : [0];
   let lastErr;
@@ -195,13 +208,67 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
-  mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
+  mainWindow.loadURL(devServerUrl || `http://127.0.0.1:${serverPort}`);
   mainWindow.on('closed', () => {
     mainWindow = null;
+    if (pipWindow && !pipWindow.isDestroyed()) pipWindow.close();
   });
 }
+
+/**
+ * 系统级画中画：无边框置顶小窗，自己渲染播放器，
+ * 这样进度条、上一集/下一集都能保留（原生 video PiP 控件无法自定义）。
+ */
+function createPipWindow() {
+  if (pipWindow && !pipWindow.isDestroyed()) {
+    pipWindow.showInactive();
+    pipWindow.focus();
+    return;
+  }
+  const { width: areaWidth, height: areaHeight } = screen.getPrimaryDisplay().workAreaSize;
+  pipWindow = new BrowserWindow({
+    width: 440,
+    height: 300,
+    minWidth: 320,
+    minHeight: 240,
+    frame: false,
+    resizable: true,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    backgroundColor: '#000',
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+  pipWindow.setAlwaysOnTop(true, 'screen-saver');
+  pipWindow.setPosition(
+    Math.max(0, areaWidth - 460),
+    Math.max(0, areaHeight - 330),
+  );
+  pipWindow.loadURL(`${devServerUrl || `http://127.0.0.1:${serverPort}`}/?pip=1`);
+  pipWindow.once('ready-to-show', () => {
+    if (pipWindow && !pipWindow.isDestroyed()) pipWindow.showInactive();
+  });
+  pipWindow.on('closed', () => {
+    pipWindow = null;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pip:closed');
+  });
+}
+
+ipcMain.handle('pip:open', () => {
+  createPipWindow();
+});
+
+ipcMain.handle('pip:close', () => {
+  if (pipWindow && !pipWindow.isDestroyed()) pipWindow.close();
+});
 
 function stopBackend() {
   stopBackendProcessOnly();
