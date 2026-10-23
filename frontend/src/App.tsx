@@ -3,6 +3,7 @@ import { Routes, Route, Link } from 'react-router-dom';
 import Header from './components/Header.js';
 import Home from './pages/Home.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
+import UpdateBanner, { UpdateFooterLink } from './components/Updater.js';
 import { PlayerProvider } from './player/PlayerProvider.js';
 
 // 详情页会把 hls.js 一起带进来，首页用不到，按需加载
@@ -56,8 +57,10 @@ export default function App() {
             </a>{' '}
             · config.json 配置的 VOD 资源站 · 仅供学习研究
           </p>
+          <UpdateFooterLink />
         </footer>
       </div>
+      <UpdateBanner />
     </PlayerProvider>
   );
 }

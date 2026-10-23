@@ -11,3 +11,18 @@ contextBridge.exposeInMainWorld('pipBridge', {
     return () => ipcRenderer.removeListener('pip:closed', handler);
   },
 });
+
+// 桌面端自动更新：状态由主进程推送，前端只读 + 触发动作
+contextBridge.exposeInMainWorld('updaterBridge', {
+  supported: true,
+  getState: () => ipcRenderer.invoke('updater:get'),
+  check: () => ipcRenderer.invoke('updater:check'),
+  download: () => ipcRenderer.invoke('updater:download'),
+  install: () => ipcRenderer.invoke('updater:install'),
+  openReleases: () => ipcRenderer.invoke('updater:open-releases'),
+  onState: (cb) => {
+    const handler = (_event, next) => cb(next);
+    ipcRenderer.on('updater:state', handler);
+    return () => ipcRenderer.removeListener('updater:state', handler);
+  },
+});

@@ -70,12 +70,30 @@ npm run pack:portable
 
 | 文件 | 说明 |
 |------|------|
-| `Public Domain Cinema-1.0.10-portable.exe` | 绿色便携版，双击即用 |
-| `Public Domain Cinema-1.0.10-setup.exe` | 安装版 |
+| `Public-Domain-Cinema-1.0.11-portable.exe` | 绿色便携版，双击即用 |
+| `Public-Domain-Cinema-1.0.11-setup.exe` | 安装版（支持自动更新） |
+| `latest.yml` | 自动更新清单，**必须随 Release 一起上传** |
+| `Public-Domain-Cinema-1.0.11-setup.exe.blockmap` | 差量更新用的分块索引 |
 
 仅生成未压缩目录（调试打包用）：`npm run pack:dir`
 
 打包前会自动执行 `npm run build` 与 `prepare:pack`（复制构建产物并在 `pack/app` 安装后端运行时依赖）。首次打包会下载 Electron，便携/安装包约 72MB（含完整 Chromium 与语言包，去掉调试 map）。属正常现象。
+
+## 自动更新
+
+安装版内置 `electron-updater`，启动 10 秒后自动检查，之后每 6 小时一次；右下角提示条支持「下载更新 → 立即重启安装」。
+
+| 形态 | 更新方式 |
+|------|----------|
+| NSIS 安装版 | 后台下载安装包，静默安装后自动重启；`latest.yml` 提供版本号与 sha512 校验 |
+| 便携版 | 单文件 exe 没有安装目录，只提示新版本并跳转 Releases 页，需手动替换 exe |
+| 开发模式（`npm run dev:desktop`） | 不检查 |
+
+- 更新源：`package.json` 的 `build.publish` 指向 `github:blue0852/Binge-watching-Collection`，构建时写入 `resources/app-update.yml`。
+- **发布时必须上传 `latest.yml`**，否则客户端拉不到清单会报 `找不到更新清单`。
+- `artifactName` 不使用空格（用 `Public-Domain-Cinema-${version}-xxx.exe`）：GitHub 会把空格转成点、electron-builder 会转成连字符，三处不一致会导致更新下载 404。
+- 更新日志写在用户数据目录的 `update.log`（便携版为 exe 同目录，安装版为 `%APPDATA%\Public Domain Cinema\`），排查失败原因看这个文件。
+
 
 **桌面版数据路径**：便携版将 `config.json`、`server-port.json`（固定本地服务端口，供播放历史等浏览器存储复用同一站点）与 Chromium 用户数据保存在 **exe 同目录**；安装版保存在 `%APPDATA%\Public Domain Cinema\`（安装目录通常不可写）。首次启动从内置默认配置复制；在「站点管理」页可查看 config 实际路径。
 

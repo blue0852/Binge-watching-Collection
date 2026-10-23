@@ -4,6 +4,15 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import {
+  initUpdater,
+  startAutoCheck,
+  checkForUpdates,
+  downloadUpdate,
+  installUpdate,
+  openReleases,
+  getUpdateState,
+} from './updater.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isPackaged = app.isPackaged;
@@ -270,6 +279,19 @@ ipcMain.handle('pip:close', () => {
   if (pipWindow && !pipWindow.isDestroyed()) pipWindow.close();
 });
 
+/** 主窗口与画中画窗口都要收到更新状态，否则小窗模式下提示会静默丢失 */
+function broadcastUpdateState(next) {
+  for (const win of [mainWindow, pipWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('updater:state', next);
+  }
+}
+
+ipcMain.handle('updater:get', () => getUpdateState());
+ipcMain.handle('updater:check', () => checkForUpdates());
+ipcMain.handle('updater:download', () => downloadUpdate());
+ipcMain.handle('updater:install', () => installUpdate());
+ipcMain.handle('updater:open-releases', () => openReleases());
+
 function stopBackend() {
   stopBackendProcessOnly();
 }
@@ -289,6 +311,12 @@ if (!gotLock) {
     try {
       await startBackend();
       createWindow();
+      initUpdater({
+        isPackaged,
+        portable: Boolean(isPackaged && process.env.PORTABLE_EXECUTABLE_DIR),
+        onState: broadcastUpdateState,
+      });
+      startAutoCheck();
     } catch (err) {
       let msg = String(err.message || err);
       if (/EADDRINUSE|3002/.test(msg)) {
