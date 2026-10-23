@@ -7,6 +7,8 @@ export interface VodSiteConfig {
   api: string;
   name: string;
   detail?: string;
+  /** 该站直连不通、只能走代理：请求时跳过直连，直接经代理（避免白等探测预算） */
+  proxy_only?: boolean;
 }
 
 export interface AppConfig {
@@ -136,6 +138,7 @@ export function addVodSite(
     api,
     name,
     ...(detail ? { detail } : {}),
+    ...(site.proxy_only === true ? { proxy_only: true } : {}),
   };
   persistConfig(config);
   return listVodSources();

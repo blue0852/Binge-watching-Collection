@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import fetch from 'node-fetch';
 import { loadConfig } from '../config.js';
 import { createProxyAgent, mergeSignals, timeoutSignal } from './http.js';
+import { isProxyOnlyHost, markProxyOnlyHost } from './proxyHosts.js';
 import { isCacheableSegmentUrl, putCachedSegment } from './streamSegmentCache.js';
 import { formatUpstreamErrorMessage, shouldSkipWindowsFallback } from './upstreamError.js';
 
@@ -20,9 +21,11 @@ const MAX_UPSTREAM_BYTES = 16 * 1024 * 1024;
 const UPSTREAM_HEADER_TIMEOUT_MS = 20_000;
 /**
  * fallback 模式下直连的探测预算。
- * 被阻断的域名通常在 TLS 阶段秒级 RST，6s 足够；真正慢的站点交给代理。
+ * 被阻断的域名通常在 TLS 阶段秒级 RST，2.5s 足够；真正慢的站点交给代理。
+ * 注意不要超过全站搜索的单站预算（SEARCH_SITE_TIMEOUT_MS = 6s），
+ * 否则直连会把整个搜索窗口吃掉，代理根本没机会接手。
  */
-const DIRECT_PROBE_MS = 6_000;
+const DIRECT_PROBE_MS = 2_500;
 const httpAgent = new http.Agent(AGENT_OPTS);
 const httpsAgent = new https.Agent({ ...AGENT_OPTS, rejectUnauthorized: false });
 
@@ -191,9 +194,21 @@ async function fetchTextAttempt(
   return text;
 }
 
+export interface UpstreamFetchOptions {
+  /** 该请求已知必须走代理（站点 proxy_only），跳过直连探测 */
+  proxyOnly?: boolean;
+}
+
+/** 是否应当代理优先：always 模式 / 站点标记 proxy_only / 该主机已被判定必须走代理 */
+function preferProxy(url: string, proxy: ProxySetting | null, options?: UpstreamFetchOptions): boolean {
+  if (!proxy) return false;
+  if (proxy.mode === 'always') return true;
+  return options?.proxyOnly === true || isProxyOnlyHost(url);
+}
+
 /**
  * 请求上游并返回响应正文。
- * 顺序：代理(always) → 直连 → 代理(fallback) → Windows 系统 HTTP 回退。
+ * 顺序：代理优先（always / proxy_only / 已学习主机）→ 直连 → 代理(fallback) → Windows 系统 HTTP 回退。
  * 配置了 proxy 后，被 TLS 阻断的域名会由代理兜底，不影响可直连站点的速度。
  */
 export async function fetchUpstreamText(
@@ -201,21 +216,42 @@ export async function fetchUpstreamText(
   extraHeaders?: Record<string, string>,
   signal?: AbortSignal,
   timeoutMs = 15_000,
+  options?: UpstreamFetchOptions,
 ): Promise<string> {
   const headers = buildHeaders(url, extraHeaders);
   const proxy = proxySetting();
 
-  if (proxy && proxy.mode === 'always') {
+  if (proxy && preferProxy(url, proxy, options)) {
     try {
-      return await fetchTextAttempt(
+      const text = await fetchTextAttempt(
         url,
         headers,
         signal,
         timeoutMs,
         createProxyAgent(url, proxy.url),
       );
+      // 站点显式标记过 proxy_only 的，把主机记下来，分片/封面图请求也能代理优先
+      if (options?.proxyOnly) markProxyOnlyHost(url);
+      return text;
     } catch (e) {
-      throw wrapUpstreamError(normalizeFetchError(e));
+      const proxyError = normalizeFetchError(e);
+      if (signal?.aborted) throw wrapUpstreamError(proxyError);
+      // 代理不通时退回直连，尽量还能出结果
+      try {
+        return await fetchTextAttempt(
+          url,
+          headers,
+          signal,
+          Math.min(timeoutMs, DIRECT_PROBE_MS),
+          agentFor(url),
+        );
+      } catch (directErr) {
+        throw wrapUpstreamError(
+          new Error(
+            `代理失败：${proxyError.message}；直连失败：${normalizeFetchError(directErr).message}`,
+          ),
+        );
+      }
     }
   }
 
@@ -228,18 +264,21 @@ export async function fetchUpstreamText(
     nodeError = normalizeFetchError(e);
   }
 
-  // 外部预算耗尽（如全站搜索 7s 截止）时不再重试
+  // 外部预算耗尽（如全站搜索 6s 截止）时不再重试
   if (signal?.aborted) throw wrapUpstreamError(nodeError ?? new Error('上游请求超时'));
 
   if (proxy) {
     try {
-      return await fetchTextAttempt(
+      const text = await fetchTextAttempt(
         url,
         headers,
         signal,
         timeoutMs,
         createProxyAgent(url, proxy.url),
       );
+      // 直连失败、代理成功 → 记住这个主机，后续请求直接走代理
+      markProxyOnlyHost(url);
+      return text;
     } catch (e) {
       const proxyError = normalizeFetchError(e);
       throw wrapUpstreamError(
@@ -272,6 +311,7 @@ export async function fetchUpstreamBuffer(
   extraHeaders?: Record<string, string>,
   timeoutMs = 30000,
   maxBytes = MAX_UPSTREAM_BYTES,
+  options?: UpstreamFetchOptions,
 ): Promise<{ buffer: Buffer; contentType: string }> {
   const headers = {
     ...buildHeaders(url, extraHeaders),
@@ -279,17 +319,33 @@ export async function fetchUpstreamBuffer(
   };
   const proxy = proxySetting();
 
-  if (proxy && proxy.mode === 'always') {
+  if (proxy && preferProxy(url, proxy, options)) {
     try {
-      return await nodeFetchBuffer(
+      const hit = await nodeFetchBuffer(
         url,
         headers,
         timeoutMs,
         maxBytes,
         createProxyAgent(url, proxy.url),
       );
+      if (options?.proxyOnly) markProxyOnlyHost(url);
+      return hit;
     } catch (e) {
-      throw wrapUpstreamError(normalizeFetchError(e));
+      const proxyError = normalizeFetchError(e);
+      try {
+        return await nodeFetchBuffer(
+          url,
+          headers,
+          Math.min(timeoutMs, DIRECT_PROBE_MS),
+          maxBytes,
+        );
+      } catch (directErr) {
+        throw wrapUpstreamError(
+          new Error(
+            `代理失败：${proxyError.message}；直连失败：${normalizeFetchError(directErr).message}`,
+          ),
+        );
+      }
     }
   }
 
@@ -304,13 +360,15 @@ export async function fetchUpstreamBuffer(
 
   if (proxy) {
     try {
-      return await nodeFetchBuffer(
+      const hit = await nodeFetchBuffer(
         url,
         headers,
         timeoutMs,
         maxBytes,
         createProxyAgent(url, proxy.url),
       );
+      markProxyOnlyHost(url);
+      return hit;
     } catch (e) {
       const proxyError = normalizeFetchError(e);
       throw wrapUpstreamError(
@@ -386,10 +444,10 @@ export async function pipeUpstreamToResponse(
     }
   };
 
-  const proxyFirst = proxy?.mode === 'always' && proxy.url;
+  const proxyFirst = preferProxy(url, proxy);
   try {
     upstream = await headerFetch(
-      proxyFirst ? createProxyAgent(url, proxyFirst) : agentFor(url),
+      proxyFirst && proxy ? createProxyAgent(url, proxy.url) : agentFor(url),
     );
   } catch (raw) {
     if (proxy) {
@@ -398,6 +456,8 @@ export async function pipeUpstreamToResponse(
         upstream = await headerFetch(
           proxyFirst ? agentFor(url) : createProxyAgent(url, proxy.url),
         );
+        // 直连不通、代理能通 → 记住主机，后续分片直接代理优先
+        if (!proxyFirst) markProxyOnlyHost(url);
       } catch (raw2) {
         throw normalizeFetchError(raw2);
       }

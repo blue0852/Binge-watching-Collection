@@ -12,7 +12,8 @@ import type {
   VodCategory,
 } from '../types.js';
 
-const GLOBAL_SEARCH_CONCURRENCY = 12;
+/** 全站搜索并发数：站点数已到 60，12 路会排成 5 批，改成 24 路只需 2–3 批 */
+const GLOBAL_SEARCH_CONCURRENCY = 24;
 const GLOBAL_SEARCH_ROWS_PER_SITE = 6;
 /** 全站搜索时单站等待上限：死站不该拖住整个结果 */
 const SEARCH_SITE_TIMEOUT_MS = 6_000;
@@ -77,13 +78,16 @@ async function fetchVodApi(
   url: string,
   signal?: AbortSignal,
   timeoutMs?: number,
+  proxyOnly?: boolean,
 ): Promise<VodApiResponse> {
   let lastError: Error | null = null;
 
   for (const tryUrl of candidateFetchUrls(url)) {
     if (signal?.aborted) break;
     try {
-      const text = await fetchUpstreamText(tryUrl, undefined, signal, timeoutMs);
+      const text = await fetchUpstreamText(tryUrl, undefined, signal, timeoutMs, {
+        proxyOnly,
+      });
       const data = JSON.parse(text) as VodApiResponse;
       if (data.code !== undefined && data.code !== 1) {
         throw new Error(data.msg || 'VOD API 返回错误');
@@ -130,7 +134,7 @@ async function enrichWithThumbnails(
   let picMap: Map<string, string>;
   try {
     picMap = await cached(cacheKey, async () => {
-      const data = await fetchVodApi(url);
+      const data = await fetchVodApi(url, undefined, undefined, site.proxy_only === true);
       const map = new Map<string, string>();
       for (const vod of data.list ?? []) {
         const pic = normalizePicUrl(vod.vod_pic, site);
@@ -271,7 +275,7 @@ export async function getVodCategories(source: string): Promise<VodCategory[]> {
   const cacheKey = `vod:categories:${source}`;
 
   return cached(cacheKey, async () => {
-    const data = await fetchVodApi(url);
+    const data = await fetchVodApi(url, undefined, undefined, site.proxy_only === true);
     return normalizeCategories(data.class ?? []);
   });
 }
@@ -315,7 +319,7 @@ export async function listVodMovies(
   const cacheKey = `vod:list:${source}:${typeId || 'all'}:${page}`;
 
   return cached(cacheKey, async () => {
-    const data = await fetchVodApi(url);
+    const data = await fetchVodApi(url, undefined, undefined, site.proxy_only === true);
     const list = data.list ?? [];
     const limit = Number(data.limit) || rows;
     const items = await enrichWithThumbnails(
@@ -440,7 +444,7 @@ export async function searchVodMovies(
   const cacheKey = `vod:search:${source}:${safe}:${page}`;
 
   return cached(cacheKey, async () => {
-    const data = await fetchVodApi(url, signal, SEARCH_SITE_TIMEOUT_MS);
+    const data = await fetchVodApi(url, signal, SEARCH_SITE_TIMEOUT_MS, site.proxy_only === true);
     const list = data.list ?? [];
     const limit = Number(data.limit) || rows;
     const items = list.map((v) => toListItem(source, site.name, v, site));
@@ -462,7 +466,7 @@ export async function getVodMovieDetail(source: string, vodId: string): Promise<
   const cacheKey = `vod:detail:${source}:${vodId}`;
 
   return cached(cacheKey, async () => {
-    const data = await fetchVodApi(url);
+    const data = await fetchVodApi(url, undefined, undefined, site.proxy_only === true);
     const vod = data.list?.[0];
     if (!vod) return null;
 
