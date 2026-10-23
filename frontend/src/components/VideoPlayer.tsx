@@ -1301,6 +1301,7 @@ export default function VideoPlayer({
                               value={muted ? 0 : volume}
                               onChange={(e) => changeVolume(Number(e.target.value))}
                               aria-label="音量"
+                              aria-orientation="vertical"
                             />
                           </div>
                         )}
